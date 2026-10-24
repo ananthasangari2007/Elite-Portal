@@ -36,9 +36,19 @@ UTC = ZoneInfo("UTC")
 
 
 # ── Time helpers ──────────────────────────────────────────────────────────
+def _get_cfg(key: str, default=None):
+    try:
+        if current_app:
+            return current_app.config.get(key, default)
+    except Exception:
+        pass
+    from config import Config
+    return getattr(Config, key, default)
+
+
 def institution_tz() -> ZoneInfo:
     try:
-        return ZoneInfo(current_app.config.get("INSTITUTION_TIMEZONE", "Asia/Kolkata"))
+        return ZoneInfo(_get_cfg("INSTITUTION_TIMEZONE", "Asia/Kolkata"))
     except Exception:
         return ZoneInfo("Asia/Kolkata")
 
@@ -1032,8 +1042,8 @@ def admin_dashboard() -> dict:
         ],
         "system_status": {
             "database": "operational",
-            "storage": "r2" if current_app.config.get("R2_BUCKET_NAME") and current_app.config.get("R2_ENDPOINT_URL") else "local-fallback",
-            "email": "configured" if current_app.config.get("MAIL_SERVER") else "not-configured",
-            "timezone": current_app.config.get("INSTITUTION_TIMEZONE", "Asia/Kolkata"),
+            "storage": "r2" if _get_cfg("R2_BUCKET_NAME") and _get_cfg("R2_ENDPOINT_URL") else "local-fallback",
+            "email": "configured" if _get_cfg("MAIL_SERVER") else "not-configured",
+            "timezone": _get_cfg("INSTITUTION_TIMEZONE", "Asia/Kolkata"),
         },
     }

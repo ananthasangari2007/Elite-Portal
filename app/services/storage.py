@@ -18,8 +18,43 @@ ALLOWED_EXTENSIONS = {
 }
 
 
+import logging
+
+_logger = logging.getLogger("elite_portal.storage")
+
+
+def _cfg():
+    try:
+        if current_app:
+            return current_app.config
+    except Exception:
+        pass
+    from config import Config
+
+    class CfgDict(dict):
+        def __getitem__(self, key):
+            val = getattr(Config, key, None)
+            if val is None:
+                raise KeyError(key)
+            return val
+
+        def get(self, key, default=None):
+            return getattr(Config, key, default)
+
+    return CfgDict()
+
+
+def _get_logger():
+    try:
+        if current_app:
+            return current_app.logger
+    except Exception:
+        pass
+    return _logger
+
+
 def r2_configured() -> bool:
-    cfg = current_app.config
+    cfg = _cfg()
     return bool(cfg.get("R2_ENDPOINT_URL") and cfg.get("R2_ACCESS_KEY_ID") and cfg.get("R2_SECRET_ACCESS_KEY"))
 
 
@@ -27,7 +62,7 @@ def _client():
     import boto3
     from botocore.config import Config
 
-    cfg = current_app.config
+    cfg = _cfg()
     return boto3.client(
         "s3",
         endpoint_url=cfg["R2_ENDPOINT_URL"],
@@ -39,7 +74,12 @@ def _client():
 
 
 def _local_root() -> Path:
-    root = Path(current_app.config.get("UPLOAD_FOLDER") or (Path(current_app.root_path).parent / "instance" / "uploads"))
+    cfg = _cfg()
+    root_str = cfg.get("UPLOAD_FOLDER")
+    if root_str:
+        root = Path(root_str)
+    else:
+        root = Path.cwd() / "instance" / "uploads"
     root.mkdir(parents=True, exist_ok=True)
     return root
 
@@ -63,10 +103,11 @@ def save_file(file_storage, folder: str = "general") -> dict:
     if r2_configured():
         client = _client()
         extra = {"ContentType": content_type}
-        client.upload_fileobj(file_storage.stream, current_app.config["R2_BUCKET_NAME"], key, ExtraArgs=extra)
+        bucket = _cfg()["R2_BUCKET_NAME"]
+        client.upload_fileobj(file_storage.stream, bucket, key, ExtraArgs=extra)
         size = file_storage.content_length or 0
         if not size:
-            head = client.head_object(Bucket=current_app.config["R2_BUCKET_NAME"], Key=key)
+            head = client.head_object(Bucket=bucket, Key=key)
             size = head.get("ContentLength", 0)
         storage = "r2"
     else:
@@ -96,11 +137,11 @@ def file_url(key: str, expires: int = 3600) -> str | None:
         try:
             return _client().generate_presigned_url(
                 "get_object",
-                Params={"Bucket": current_app.config["R2_BUCKET_NAME"], "Key": key},
+                Params={"Bucket": _cfg()["R2_BUCKET_NAME"], "Key": key},
                 ExpiresIn=expires,
             )
         except Exception:
-            current_app.logger.exception("Could not sign R2 URL")
+            _get_logger().exception("Could not sign R2 URL")
             return None
     return f"/api/v1/files/{key}"
 
@@ -125,9 +166,9 @@ def local_exists(key: str) -> bool:
 def delete_file(key: str):
     if r2_configured():
         try:
-            _client().delete_object(Bucket=current_app.config["R2_BUCKET_NAME"], Key=key)
+            _client().delete_object(Bucket=_cfg()["R2_BUCKET_NAME"], Key=key)
         except Exception:
-            current_app.logger.exception("Could not delete R2 object %s", key)
+            _get_logger().exception("Could not delete R2 object %s", key)
         return
     try:
         os.remove(read_local(key))

@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import { api, clearCsrf, ensureCsrf, setCsrfToken } from "./api";
+import { api, clearCsrf, ensureCsrf, setCsrfToken, setStoredToken } from "./api";
 
 export type Role = "student" | "coordinator" | "faculty" | "admin";
 
@@ -40,22 +40,38 @@ export const PORTAL_HOME: Record<Role, string> = {
   admin: "/admin",
 };
 
+let activeRefreshPromise: Promise<void> | null = null;
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
-    try {
-      const res = await api.get<{ user: User; csrf_token?: string } | null>("/auth/me");
-      if (res?.csrf_token) {
-        setCsrfToken(res.csrf_token);
-      } else {
-        await ensureCsrf();
-      }
-      setUser(res?.user ?? null);
-    } catch {
-      setUser(null);
+    if (activeRefreshPromise) {
+      return activeRefreshPromise;
     }
+
+    activeRefreshPromise = (async () => {
+      try {
+        const res = await api.get<{ user: User; csrf_token?: string; token?: string } | null>("/auth/me");
+        if (res?.csrf_token) {
+          setCsrfToken(res.csrf_token);
+        } else {
+          await ensureCsrf();
+        }
+        if (res?.token) {
+          setStoredToken(res.token);
+        }
+        setUser(res?.user ?? null);
+      } catch {
+        setUser(null);
+        setStoredToken(null);
+      } finally {
+        activeRefreshPromise = null;
+      }
+    })();
+
+    return activeRefreshPromise;
   }, []);
 
   useEffect(() => {
@@ -65,6 +81,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const handler = () => {
       clearCsrf();
+      setStoredToken(null);
       setUser(null);
     };
     window.addEventListener("elite:unauthorized", handler);
@@ -72,7 +89,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const login = useCallback(async (email: string, password: string, portal: Role) => {
-    const data = await api.post<{ user: User; csrf_token?: string }>("/auth/login", { email, password, portal });
+    const data = await api.post<{ user: User; csrf_token?: string; token?: string }>("/auth/login", { email, password, portal });
+    if (data.token) {
+      setStoredToken(data.token);
+    }
     if (data.csrf_token) {
       setCsrfToken(data.csrf_token);
     } else {
@@ -93,6 +113,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch {
       clearCsrf();
     } finally {
+      setStoredToken(null);
       setUser(null);
     }
   }, []);

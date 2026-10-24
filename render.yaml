@@ -2,6 +2,6 @@ services:
   - type: web
     name: elite-dashboard
     env: python
-    buildCommand: pip install -r requirements.txt && flask --app run.py db upgrade
-    startCommand: gunicorn run:app
-    releaseCommand: flask --app run.py db upgrade
+    buildCommand: pip install -r requirements.txt && flask --app app:create_app db upgrade
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    releaseCommand: flask --app app:create_app db upgrade
