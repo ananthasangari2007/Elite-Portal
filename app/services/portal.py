@@ -360,25 +360,28 @@ def current_streak(student_id: int) -> int:
     return streak
 
 
-# ── Daily task submission (one per student per business day) ──────────────
-def today_submission(student_id: int) -> TaskEvidence | None:
-    return TaskEvidence.query.filter_by(
+# ── Daily task submission (one per student per task per business day) ──────────────
+def today_submission(student_id: int, task_id: int | None = None) -> TaskEvidence | None:
+    q = TaskEvidence.query.filter_by(
         student_id=student_id, submission_date=business_date()
-    ).first()
+    )
+    if task_id is not None:
+        q = q.filter_by(task_id=task_id)
+    return q.first()
 
 
-def can_submit_daily_task(student_id: int) -> tuple[bool, str | None]:
-    existing = today_submission(student_id)
+def can_submit_daily_task(student_id: int, task_id: int | None = None) -> tuple[bool, str | None]:
+    existing = today_submission(student_id, task_id=task_id)
     if existing is None:
         return True, None
     if existing.status == "rejected":
-        return False, "Your submission for today was rejected. One submission is allowed per day."
-    return False, "You have already submitted today's Elite Task. One submission per business day."
+        return False, "Your submission for this task today was rejected. One submission is allowed per day for each assigned task."
+    return False, "You have already submitted this Elite Task today. One submission per assigned task is allowed each day."
 
 
 def submit_daily_task(*, task: EliteTask, student_id: int, evidence: dict) -> TaskEvidence:
     """Create today's evidence row inside a transaction; unique constraint guards races."""
-    allowed, message = can_submit_daily_task(student_id)
+    allowed, message = can_submit_daily_task(student_id, task_id=task.id)
     if not allowed:
         raise ValueError(message)
 
@@ -402,7 +405,7 @@ def submit_daily_task(*, task: EliteTask, student_id: int, evidence: dict) -> Ta
     except IntegrityError as exc:
         db.session.rollback()
         raise ValueError(
-            "You have already submitted an Elite Task today. One submission per business day."
+            "You have already submitted this Elite Task today. One submission per assigned task is allowed each day."
         ) from exc
     return row
 
@@ -476,7 +479,13 @@ def active_announcements(user: User):
 
 
 # ── Leaderboards ──────────────────────────────────────────────────────────
-def leaderboard(scope: str = "overall", domain_id: int | None = None, month: str | None = None, limit: int = 100):
+def leaderboard(
+    scope: str = "overall",
+    domain_id: int | None = None,
+    month: str | None = None,
+    department: str | None = None,
+    limit: int = 20,
+):
     """Eligible points only: ledger rows that are not reversed."""
     query = (
         db.session.query(
@@ -484,15 +493,20 @@ def leaderboard(scope: str = "overall", domain_id: int | None = None, month: str
             User.name,
             User.register_number,
             User.department,
+            User.avatar_url,
             func.coalesce(func.sum(PointLedger.points), 0).label("points"),
         )
         .join(PointLedger, PointLedger.student_id == User.id)
         .filter(User.role == "student", PointLedger.is_reversed.is_(False))
     )
-    if scope in ("dsa", "fullstack", "aiml", "embedded"):
-        query = query.join(Domain, Domain.id == PointLedger.domain_id).filter(Domain.code == scope.upper())
-    elif scope == "domain" and domain_id:
-        query = query.filter(PointLedger.domain_id == domain_id)
+    if department:
+        query = query.filter(func.lower(User.department) == department.strip().lower())
+
+    if scope != "overall" and scope != "monthly":
+        if domain_id:
+            query = query.filter(PointLedger.domain_id == domain_id)
+        else:
+            query = query.join(Domain, Domain.id == PointLedger.domain_id).filter(func.lower(Domain.code) == scope.lower())
 
     if scope == "monthly" and month:
         try:
@@ -504,7 +518,7 @@ def leaderboard(scope: str = "overall", domain_id: int | None = None, month: str
             pass
 
     rows = (
-        query.group_by(User.id, User.name, User.register_number, User.department)
+        query.group_by(User.id, User.name, User.register_number, User.department, User.avatar_url)
         .order_by(func.coalesce(func.sum(PointLedger.points), 0).desc(), User.name.asc())
         .limit(limit)
         .all()
@@ -516,15 +530,90 @@ def leaderboard(scope: str = "overall", domain_id: int | None = None, month: str
             "name": r[1],
             "register_number": r[2],
             "department": r[3],
-            "points": int(r[4] or 0),
+            "avatar_url": r[4],
+            "points": int(r[5] or 0),
         }
         for i, r in enumerate(rows, start=1)
     ]
 
 
+def student_leaderboard_ranks(student_id: int) -> dict:
+    """Computes exact current rank for a student in Overall and each enrolled domain."""
+    # 1. Overall rank
+    overall_all = (
+        db.session.query(
+            User.id,
+            func.coalesce(func.sum(PointLedger.points), 0).label("pts"),
+        )
+        .join(PointLedger, PointLedger.student_id == User.id)
+        .filter(User.role == "student", PointLedger.is_reversed.is_(False))
+        .group_by(User.id)
+        .order_by(func.coalesce(func.sum(PointLedger.points), 0).desc())
+        .all()
+    )
+    overall_rank = next((idx for idx, (uid, _) in enumerate(overall_all, start=1) if uid == student_id), None)
+    overall_pts = next((int(pts or 0) for uid, pts in overall_all if uid == student_id), 0)
+
+    # 2. Registered domains ranks
+    enrolled = enrolled_domains(student_id)
+    domain_ranks = {}
+    for d in enrolled:
+        d_all = (
+            db.session.query(
+                User.id,
+                func.coalesce(func.sum(PointLedger.points), 0).label("pts"),
+            )
+            .join(PointLedger, PointLedger.student_id == User.id)
+            .filter(User.role == "student", PointLedger.is_reversed.is_(False), PointLedger.domain_id == d.id)
+            .group_by(User.id)
+            .order_by(func.coalesce(func.sum(PointLedger.points), 0).desc())
+            .all()
+        )
+        d_rank = next((idx for idx, (uid, _) in enumerate(d_all, start=1) if uid == student_id), None)
+        d_pts = next((int(pts or 0) for uid, pts in d_all if uid == student_id), 0)
+        domain_ranks[d.code] = {
+            "domain_id": d.id,
+            "domain_name": d.name,
+            "domain_code": d.code,
+            "rank": d_rank,
+            "points": d_pts,
+        }
+
+    return {
+        "overall": {"rank": overall_rank, "points": overall_pts},
+        "domains": domain_ranks,
+    }
+
+
 # ── Dashboard aggregations ────────────────────────────────────────────────
 def student_dashboard(student_id: int) -> dict:
     domains = enrolled_domains(student_id)
+    domain_ids = [d.id for d in domains]
+
+    pub_counts = {}
+    comp_counts = {}
+    if domain_ids:
+        for dom_id, cnt in (
+            db.session.query(LearningDay.domain_id, func.count(LearningDay.id))
+            .filter(LearningDay.domain_id.in_(domain_ids), LearningDay.status == "published")
+            .group_by(LearningDay.domain_id)
+            .all()
+        ):
+            pub_counts[dom_id] = int(cnt)
+
+        for dom_id, cnt in (
+            db.session.query(LearningDay.domain_id, func.count(func.distinct(LearningDay.id)))
+            .join(ContentCompletion, ContentCompletion.learning_day_id == LearningDay.id)
+            .filter(
+                LearningDay.domain_id.in_(domain_ids),
+                ContentCompletion.student_id == student_id,
+                ContentCompletion.is_day_complete.is_(True),
+            )
+            .group_by(LearningDay.domain_id)
+            .all()
+        ):
+            comp_counts[dom_id] = int(cnt)
+
     progress = [
         {
             "domain_id": d.id,
@@ -532,14 +621,21 @@ def student_dashboard(student_id: int) -> dict:
             "name": d.name,
             "color": d.color,
             "icon": d.icon,
-            **domain_progress(student_id, d.id),
+            "published_days": pub_counts.get(d.id, 0),
+            "completed_days": comp_counts.get(d.id, 0),
+            "percent": round((comp_counts.get(d.id, 0) / pub_counts[d.id]) * 100)
+            if pub_counts.get(d.id, 0)
+            else 0,
         }
         for d in domains
     ]
 
     videos_completed = 0
-    for completion in ContentCompletion.query.filter_by(student_id=student_id).all():
-        watched = completion.videos_watched or []
+    for (watched,) in (
+        db.session.query(ContentCompletion.videos_watched)
+        .filter(ContentCompletion.student_id == student_id)
+        .all()
+    ):
         if isinstance(watched, list):
             videos_completed += len(watched)
 
@@ -548,7 +644,6 @@ def student_dashboard(student_id: int) -> dict:
         AssessmentAttempt.status.in_(["submitted", "graded"]),
     ).count()
 
-    domain_ids = [d.id for d in domains]
     now = now_utc()
     today_tasks = (
         EliteTask.query.filter(
@@ -588,12 +683,32 @@ def student_dashboard(student_id: int) -> dict:
         .all()
     )
 
+    appeals_assigned = (
+        Appeal.query.filter(
+            Appeal.student_id == student_id,
+            Appeal.status == "in_review",
+            Appeal.assigned_to.isnot(None),
+        )
+        .all()
+    )
+    faculty_instructions = [
+        {
+            "id": a.id,
+            "faculty_name": a.assigned_reviewer.name if a.assigned_reviewer else "Faculty Coordinator",
+            "faculty_email": a.assigned_reviewer.email if a.assigned_reviewer else None,
+            "assessment": a.attempt.assessment.title if a.attempt else "Assessment",
+            "message": f"You are instructed to meet the faculty {a.assigned_reviewer.name if a.assigned_reviewer else ''}.",
+        }
+        for a in appeals_assigned
+    ]
+
     return {
         "total_points": points_total(student_id),
         "videos_completed": videos_completed,
         "assessments_completed": assessments_completed,
         "current_streak": current_streak(student_id),
         "progress": progress,
+        "faculty_instructions": faculty_instructions,
         "today_tasks": [
             {
                 "id": t.id,

@@ -15,6 +15,7 @@ from app.api.utils import (
 )
 from app.models import DomainAssignment, PasswordResetToken, User
 from app.services.portal import audit, enrolled_domains, iso, now_utc
+from app.services.storage import save_file, validate_upload
 
 auth_api = Blueprint("api_auth", __name__, url_prefix="/api/v1/auth")
 
@@ -45,6 +46,7 @@ def me():
     return ok(
         {
             "user": user_public(current_user),
+            "csrf_token": csrf_token(),
             "domains": [
                 {"id": d.id, "code": d.code, "name": d.name, "is_compulsory": d.is_compulsory, "color": d.color}
                 for d in enrolled_domains(current_user.id)
@@ -106,10 +108,12 @@ def login():
     session.permanent = True
     user.last_login = now_utc()
     db.session.commit()
+    token = csrf_token()
 
     return ok(
         {
             "user": user_public(user),
+            "csrf_token": token,
             "redirect": {
                 "student": "/student",
                 "coordinator": "/coordinator",
@@ -128,7 +132,21 @@ def logout():
         db.session.commit()
     logout_user()
     session.clear()
-    return ok({"message": "Signed out."})
+    token = csrf_token()
+    return ok({"message": "Signed out.", "csrf_token": token})
+
+
+@auth_api.post("/upload-avatar")
+@limiter.limit("20 per hour")
+def upload_avatar():
+    if "file" not in request.files:
+        raise ApiError("No file provided.", 400, "missing_file")
+    f = request.files["file"]
+    safe_name, ext = validate_upload(f)
+    if ext not in {"png", "jpg", "jpeg", "webp", "gif"}:
+        raise ApiError("Profile picture must be an image (PNG, JPG, WEBP).", 400, "invalid_image_type")
+    meta = save_file(f, folder="avatars")
+    return ok(meta, 201)
 
 
 @auth_api.post("/register")
@@ -139,6 +157,11 @@ def register():
     email = (data.get("email") or "").strip().lower()
     password = data.get("password") or ""
     register_number = (data.get("register_number") or "").strip()
+    phone_number = (data.get("phone_number") or "").strip()
+    linkedin_url = (data.get("linkedin_url") or "").strip()
+    github_url = (data.get("github_url") or "").strip()
+    leetcode_url = (data.get("leetcode_url") or "").strip()
+    avatar_url = (data.get("avatar_url") or "").strip()
 
     if len(name) < 2:
         raise ApiError("Please enter your full name.", 400, "invalid_name")
@@ -155,6 +178,11 @@ def register():
         role="student",
         approval_status="pending",
         register_number=register_number or None,
+        phone_number=phone_number or None,
+        linkedin_url=linkedin_url or None,
+        github_url=github_url or None,
+        leetcode_url=leetcode_url or None,
+        avatar_url=avatar_url or None,
     )
     user.set_password(password)
     db.session.add(user)
@@ -259,6 +287,7 @@ def update_profile():
     editable = [
         "name",
         "register_number",
+        "phone_number",
         "department",
         "section",
         "linkedin_url",

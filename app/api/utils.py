@@ -62,7 +62,11 @@ def json_body(required=True):
     return data
 
 
-def get_int(value, default=None, minimum=None, maximum=None, name="value"):
+def get_int(value, default=None, minimum=None, maximum=None, name="value", min_val=None, max_val=None):
+    if minimum is None and min_val is not None:
+        minimum = min_val
+    if maximum is None and max_val is not None:
+        maximum = max_val
     if value is None or value == "":
         return default
     try:
@@ -131,6 +135,7 @@ def user_public(user):
         "email": user.email,
         "role": user.role,
         "register_number": user.register_number,
+        "phone_number": user.phone_number,
         "department": user.department,
         "year": user.year,
         "section": user.section,
@@ -268,6 +273,9 @@ def assessment_public(assessment, include_questions=False, include_answers=False
         "title": assessment.title,
         "description": assessment.description,
         "assessment_type": assessment.assessment_type,
+        "grading_mode": getattr(assessment, "grading_mode", "automatic") or "automatic",
+        "attendance_points": getattr(assessment, "attendance_points", 5) or 0,
+        "allowed_languages": getattr(assessment, "allowed_languages", None) or [],
         "total_marks": assessment.total_marks,
         "time_limit_minutes": assessment.time_limit_minutes,
         "max_attempts": assessment.max_attempts,
@@ -279,6 +287,7 @@ def assessment_public(assessment, include_questions=False, include_answers=False
         "scheduled_start": iso(assessment.scheduled_start),
         "scheduled_end": iso(assessment.scheduled_end),
         "instructions": assessment.instructions,
+        "available": assessment.is_available,
         "question_count": len(assessment.questions),
         "published_at": iso(assessment.published_at),
         "created_at": iso(assessment.created_at),
@@ -294,6 +303,7 @@ def attempt_public(attempt, include_detail=False):
         "assessment_id": attempt.assessment_id,
         "assessment": attempt.assessment.title,
         "assessment_type": attempt.assessment.assessment_type,
+        "allowed_languages": getattr(attempt.assessment, "allowed_languages", None) or [],
         "student_id": attempt.student_id,
         "student": attempt.student.name if attempt.student else None,
         "register_number": attempt.student.register_number if attempt.student else None,
@@ -336,6 +346,26 @@ def attempt_public(attempt, include_detail=False):
         ]
         data["integrity_flags"] = attempt.integrity_flags or []
     return data
+
+
+def authorization_public(auth):
+    return {
+        "id": auth.id,
+        "assessment_id": auth.assessment_id,
+        "assessment_title": auth.assessment.title if auth.assessment else None,
+        "student_id": auth.student_id,
+        "student_name": auth.student.name if auth.student else "All Students",
+        "student_register_number": auth.student.register_number if auth.student else None,
+        "authorized_by": auth.authorized_by,
+        "authorizer_name": auth.authorizer.name if auth.authorizer else None,
+        "authorization_type": auth.authorization_type,
+        "extra_attempts": auth.extra_attempts,
+        "valid_until": iso(auth.valid_until),
+        "reason": auth.reason,
+        "is_active": auth.is_active,
+        "created_at": iso(auth.created_at),
+    }
+
 
 
 def evidence_public(evidence):

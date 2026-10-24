@@ -48,6 +48,7 @@ export const NAV: Record<Role, NavSection[]> = {
     {
       title: "Support",
       items: [
+        { label: "My Appeals", to: "/student/appeals", icon: Scale },
         { label: "Requests", to: "/requests", icon: MessageSquare },
         { label: "Notifications", to: "/notifications", icon: Bell },
         { label: "Profile", to: "/profile", icon: UserCog },
@@ -87,6 +88,7 @@ export const NAV: Record<Role, NavSection[]> = {
         { label: "Task Evidence", to: "/faculty/evidence", icon: FileSearch },
         { label: "Appeals", to: "/faculty/appeals", icon: Scale },
         { label: "Point Adjustments", to: "/faculty/adjustments", icon: Gauge },
+        { label: "Authorizations", to: "/faculty/authorizations", icon: ShieldCheck },
       ],
     },
     {

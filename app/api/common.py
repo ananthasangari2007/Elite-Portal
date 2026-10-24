@@ -1,7 +1,7 @@
 """Shared API — uploads, private requests, notifications, public config."""
 from __future__ import annotations
 
-from flask import Blueprint, current_app, request, send_file
+from flask import Blueprint, current_app, redirect, request, send_file
 from flask_login import current_user
 
 from app import db
@@ -68,17 +68,18 @@ def upload():
 
 @common_api.get("/files/<path:key>")
 def download(key):
-    if not current_user.is_authenticated:
-        raise ApiError("Authentication required.", 401, "unauthenticated")
-
-    if not _can_read_key(key):
-        raise ApiError("You do not have access to this file.", 403, "forbidden")
+    is_public = key.startswith("avatars/") or key.startswith("materials/")
+    if not is_public:
+        if not current_user.is_authenticated:
+            raise ApiError("Authentication required.", 401, "unauthenticated")
+        if not _can_read_key(key):
+            raise ApiError("You do not have access to this file.", 403, "forbidden")
 
     if r2_configured():
         url = file_url(key)
         if not url:
             raise ApiError("File could not be retrieved.", 502, "storage_error")
-        return ok({"url": url, "expires_in": 3600})
+        return redirect(url)
 
     try:
         path = read_local(key)

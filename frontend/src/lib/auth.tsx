@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import { api, clearCsrf, ensureCsrf } from "./api";
+import { api, clearCsrf, ensureCsrf, setCsrfToken } from "./api";
 
 export type Role = "student" | "coordinator" | "faculty" | "admin";
 
@@ -10,6 +10,7 @@ export type User = {
   role: Role;
   phone?: string | null;
   roll_number?: string | null;
+  register_number?: string | null;
   department?: string | null;
   year?: number | null;
   section?: string | null;
@@ -45,8 +46,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const refresh = useCallback(async () => {
     try {
-      await ensureCsrf();
-      const res = await api.get<{ user: User } | null>("/auth/me");
+      const res = await api.get<{ user: User; csrf_token?: string } | null>("/auth/me");
+      if (res?.csrf_token) {
+        setCsrfToken(res.csrf_token);
+      } else {
+        await ensureCsrf();
+      }
       setUser(res?.user ?? null);
     } catch {
       setUser(null);
@@ -67,16 +72,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const login = useCallback(async (email: string, password: string, portal: Role) => {
-    const data = await api.post<{ user: User }>("/auth/login", { email, password, portal });
+    const data = await api.post<{ user: User; csrf_token?: string }>("/auth/login", { email, password, portal });
+    if (data.csrf_token) {
+      setCsrfToken(data.csrf_token);
+    } else {
+      await ensureCsrf(true);
+    }
     setUser(data.user);
     return data.user;
   }, []);
 
   const logout = useCallback(async () => {
     try {
-      await api.post("/auth/logout");
-    } finally {
+      const data = await api.post<{ csrf_token?: string }>("/auth/logout");
+      if (data?.csrf_token) {
+        setCsrfToken(data.csrf_token);
+      } else {
+        clearCsrf();
+      }
+    } catch {
       clearCsrf();
+    } finally {
       setUser(null);
     }
   }, []);

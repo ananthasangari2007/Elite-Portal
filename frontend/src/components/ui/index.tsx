@@ -1,6 +1,6 @@
 import clsx from "clsx";
 import { AlertTriangle, ChevronLeft, ChevronRight, Inbox, Loader2, X } from "lucide-react";
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { humanize, initials, type Tone } from "../../lib/format";
 
 export function Spinner({ className }: { className?: string }) {
@@ -92,12 +92,24 @@ export function StatusBadge({ status, label }: { status?: string | null; label?:
 }
 
 export function Avatar({ name, src, size = 40 }: { name?: string | null; src?: string | null; size?: number }) {
-  return src ? (
-    <img src={src} alt={name || "avatar"} className="rounded-full object-cover" style={{ width: size, height: size }} />
+  const [imgFailed, setImgFailed] = useState(false);
+
+  useEffect(() => {
+    setImgFailed(false);
+  }, [src]);
+
+  return src && !imgFailed ? (
+    <img
+      src={src}
+      alt={name || "avatar"}
+      onError={() => setImgFailed(true)}
+      className="rounded-full object-cover shrink-0"
+      style={{ width: size, height: size }}
+    />
   ) : (
     <div
-      className="flex items-center justify-center rounded-full bg-brand-100 font-semibold text-brand-700"
-      style={{ width: size, height: size, fontSize: size * 0.38 }}
+      className="flex items-center justify-center rounded-full bg-brand-100 font-semibold text-brand-700 shrink-0 select-none"
+      style={{ width: size, height: size, fontSize: Math.max(10, size * 0.38) }}
     >
       {initials(name)}
     </div>

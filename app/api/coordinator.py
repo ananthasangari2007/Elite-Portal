@@ -388,6 +388,9 @@ def create_assessment():
         title=title,
         description=data.get("description"),
         assessment_type=assessment_type,
+        grading_mode=(data.get("grading_mode") or "automatic").strip().lower(),
+        attendance_points=get_int(data.get("attendance_points"), 5, 0, name="attendance_points"),
+        allowed_languages=data.get("allowed_languages") or [],
         total_marks=total_marks,
         time_limit_minutes=get_int(data.get("time_limit_minutes"), None, 1, name="time_limit_minutes"),
         max_attempts=get_int(data.get("max_attempts"), 1, 1, name="max_attempts"),
@@ -395,12 +398,14 @@ def create_assessment():
         shuffle_questions=bool(data.get("shuffle_questions")),
         show_results_after=data.get("show_results_after") if data.get("show_results_after") in {"submission", "grading", "never"} else "submission",
         show_correct_answers=bool(data.get("show_correct_answers")),
-        status="draft",
+        status=data.get("status") if data.get("status") in {"draft", "published", "scheduled"} else "draft",
         scheduled_start=parse_dt(data.get("scheduled_start"), "scheduled_start"),
         scheduled_end=parse_dt(data.get("scheduled_end"), "scheduled_end"),
         instructions=data.get("instructions"),
         created_by=current_user.id,
     )
+    if assessment.status == "published":
+        assessment.published_at = now_utc()
     db.session.add(assessment)
     db.session.flush()
     if questions:
@@ -427,6 +432,12 @@ def update_assessment(assessment_id):
     for field in ("title", "description", "instructions"):
         if field in data:
             setattr(assessment, field, data[field])
+    if "grading_mode" in data and data["grading_mode"] in {"automatic", "manual"}:
+        assessment.grading_mode = data["grading_mode"]
+    if "attendance_points" in data:
+        assessment.attendance_points = get_int(data.get("attendance_points"), 5, 0, name="attendance_points")
+    if "allowed_languages" in data:
+        assessment.allowed_languages = data.get("allowed_languages") or []
     if "total_marks" in data:
         assessment.total_marks = get_int(data.get("total_marks"), assessment.total_marks, 0, name="total_marks")
     if "time_limit_minutes" in data:
@@ -861,6 +872,76 @@ def analytics():
             ],
         }
     )
+
+
+@coordinator_api.get("/coordinator/students/progress")
+@require_roles("coordinator", "faculty", "admin")
+def student_progress():
+    domain_ids = domain_ids_for(current_user) if current_user.role != "admin" else [d.id for d in Domain.query.all()]
+    student_ids = student_ids_in_domains(domain_ids)
+
+    query = User.query.filter(User.role == "student", User.id.in_(student_ids or [-1]))
+
+    q = (request.args.get("q") or "").strip()
+    if q:
+        like = f"%{q}%"
+        query = query.filter((User.name.ilike(like)) | (User.register_number.ilike(like)) | (User.email.ilike(like)))
+
+    dept = request.args.get("department")
+    if dept and dept != "all":
+        query = query.filter(User.department == dept)
+
+    query = query.order_by(User.name.asc())
+    paged = paginate(query, default_per_page=20, max_per_page=100)
+
+    domain_day_counts = {
+        d_id: LearningDay.query.filter_by(domain_id=d_id, status="published").count()
+        for d_id in domain_ids
+    }
+
+    items = []
+    for s in paged["items"]:
+        enrolled = (
+            StudentDomainEnrollment.query.filter(
+                StudentDomainEnrollment.student_id == s.id,
+                StudentDomainEnrollment.is_active == True,
+                StudentDomainEnrollment.domain_id.in_(domain_ids or [-1]),
+            ).all()
+        )
+        enrolled_domain_ids = [e.domain_id for e in enrolled]
+        enrolled_domain_names = [e.domain.name for e in enrolled if e.domain]
+
+        total_days = sum(domain_day_counts.get(did, 0) for did in enrolled_domain_ids)
+        completed_days = (
+            ContentCompletion.query.join(LearningDay, LearningDay.id == ContentCompletion.learning_day_id)
+            .filter(
+                ContentCompletion.student_id == s.id,
+                ContentCompletion.is_day_complete == True,
+                LearningDay.domain_id.in_(enrolled_domain_ids or [-1]),
+            )
+            .count()
+        )
+        pct = round((completed_days / total_days) * 100) if total_days > 0 else 0
+        attempts_count = AssessmentAttempt.query.join(Assessment, Assessment.id == AssessmentAttempt.assessment_id).filter(
+            AssessmentAttempt.student_id == s.id,
+            Assessment.domain_id.in_(enrolled_domain_ids or [-1]),
+        ).count()
+
+        items.append({
+            "id": s.id,
+            "name": s.name,
+            "register_number": s.register_number,
+            "email": s.email,
+            "department": s.department,
+            "domains": enrolled_domain_names,
+            "total_days": total_days,
+            "completed_days": completed_days,
+            "completion_percent": pct,
+            "assessments_taken": attempts_count,
+            "total_points": points_breakdown(s.id)["total"],
+        })
+
+    return ok(items, meta=paged["meta"])
 
 
 @coordinator_api.get("/coordinator/exports/students.csv")

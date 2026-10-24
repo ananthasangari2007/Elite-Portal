@@ -76,13 +76,16 @@ def save_file(file_storage, folder: str = "general") -> dict:
         size = destination.stat().st_size
         storage = "local"
 
+    preview = file_url(key)
     return {
+        "key": key,
         "file_key": key,
         "file_name": safe_name,
         "file_size": size,
         "file_type": content_type,
         "storage": storage,
-        "preview_url": file_url(key),
+        "url": preview,
+        "preview_url": preview,
     }
 
 

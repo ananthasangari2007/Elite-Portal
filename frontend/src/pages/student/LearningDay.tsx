@@ -108,7 +108,7 @@ export default function LearningDayPage() {
             <Card title="Assessments for this day" pad={false}>
               <div className="divide-y divide-slate-100">
                 {data.assessments.map((a: any) => (
-                  <Link key={a.id} to="/student/assessments" className="flex items-center gap-3 px-5 py-3.5 hover:bg-slate-50">
+                  <Link key={a.id} to={`/student/assessments?id=${a.id}`} className="flex items-center gap-3 px-5 py-3.5 hover:bg-slate-50">
                     <ClipboardCheck className="h-4 w-4 text-slate-400" />
                     <div className="min-w-0 flex-1">
                       <p className="text-sm font-medium text-slate-800">{a.title}</p>

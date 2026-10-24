@@ -14,18 +14,35 @@ export class ApiError extends Error {
 }
 
 let csrfToken: string | null = null;
+let csrfPromise: Promise<string> | null = null;
 
-export async function ensureCsrf(): Promise<string> {
-  if (csrfToken) return csrfToken;
-  const res = await fetch(`${API_BASE}/auth/csrf`, { credentials: "include" });
-  if (!res.ok) throw new ApiError("Could not initialise a secure session.", res.status, "csrf_init_failed");
-  const body = await res.json();
-  csrfToken = body.data.csrf_token as string;
-  return csrfToken;
+export function setCsrfToken(token: string | null) {
+  csrfToken = token;
+  csrfPromise = null;
+}
+
+export async function ensureCsrf(force = false): Promise<string> {
+  if (csrfToken && !force) return csrfToken;
+  if (csrfPromise && !force) return csrfPromise;
+
+  csrfPromise = (async () => {
+    try {
+      const res = await fetch(`${API_BASE}/auth/csrf`, { credentials: "include" });
+      if (!res.ok) throw new ApiError("Could not initialise a secure session.", res.status, "csrf_init_failed");
+      const body = await res.json();
+      csrfToken = (body?.data?.csrf_token as string) || null;
+      return csrfToken || "";
+    } finally {
+      csrfPromise = null;
+    }
+  })();
+
+  return csrfPromise;
 }
 
 export function clearCsrf() {
   csrfToken = null;
+  csrfPromise = null;
 }
 
 type Options = {
@@ -46,7 +63,7 @@ function buildUrl(path: string, params?: Options["params"]) {
   return url.pathname + url.search;
 }
 
-export async function request<T = any>(path: string, options: Options = {}): Promise<T> {
+export async function request<T = any>(path: string, options: Options = {}, isRetry = false): Promise<T> {
   const method = (options.method || "GET").toUpperCase();
   const headers: Record<string, string> = {};
   let body: BodyInit | undefined;
@@ -58,9 +75,15 @@ export async function request<T = any>(path: string, options: Options = {}): Pro
     body = JSON.stringify(options.body);
   }
 
-  if (["POST", "PUT", "PATCH", "DELETE"].includes(method) && !path.startsWith("/auth/login") &&
-      !path.startsWith("/auth/forgot-password") && !path.startsWith("/auth/reset-password") &&
-      !path.startsWith("/auth/register")) {
+  const isMutating = ["POST", "PUT", "PATCH", "DELETE"].includes(method);
+  const isAuthExempt =
+    path.startsWith("/auth/login") ||
+    path.startsWith("/auth/logout") ||
+    path.startsWith("/auth/forgot-password") ||
+    path.startsWith("/auth/reset-password") ||
+    path.startsWith("/auth/register");
+
+  if (isMutating && !isAuthExempt) {
     headers["X-CSRF-Token"] = await ensureCsrf();
   }
 
@@ -87,10 +110,15 @@ export async function request<T = any>(path: string, options: Options = {}): Pro
   }
 
   if (!res.ok) {
+    const error = payload?.error;
+    if (res.status === 403 && error?.code === "csrf_failed" && !isRetry) {
+      clearCsrf();
+      await ensureCsrf(true);
+      return request<T>(path, options, true);
+    }
     if (res.status === 401 && !path.startsWith("/auth/")) {
       window.dispatchEvent(new Event("elite:unauthorized"));
     }
-    const error = payload?.error;
     throw new ApiError(
       error?.message || "Something went wrong. Please try again.",
       res.status,
@@ -108,6 +136,7 @@ export const api = {
   patch: <T = any>(path: string, body?: unknown) => request<T>(path, { method: "PATCH", body }),
   put: <T = any>(path: string, body?: unknown) => request<T>(path, { method: "PUT", body }),
   del: <T = any>(path: string) => request<T>(path, { method: "DELETE" }),
+  delete: <T = any>(path: string) => request<T>(path, { method: "DELETE" }),
   upload: <T = any>(path: string, formData: FormData) => request<T>(path, { method: "POST", formData }),
   download: async (path: string, filename: string) => {
     const blob = await request<Blob>(path);

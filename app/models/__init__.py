@@ -29,6 +29,7 @@ from app.models.assessment import (
     AssessmentAttempt,
     AssessmentAnswer,
     CodingSubmission,
+    AssessmentAuthorization,
 )
 from app.models.platform import (
     EliteTask,
@@ -53,6 +54,7 @@ __all__ = [
     "LearningDay", "LearningMaterial", "ContentCompletion",
     "Assessment", "AssessmentQuestion", "AssessmentOption",
     "TestCase", "AssessmentAttempt", "AssessmentAnswer", "CodingSubmission",
+    "AssessmentAuthorization",
     "EliteTask", "TaskEvidence", "PointLedger", "PointAdjustmentRequest",
     "Appeal", "StudentRequest", "RequestMessage",
     "Announcement", "Notification", "AuditLog", "SystemSetting",

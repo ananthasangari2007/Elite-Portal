@@ -32,7 +32,9 @@ The Elite Portal architecture was audited for compliance with modern web applica
   - **Server-rendered Templates:** Jinja2 autoescaping is enabled for all `.html` templates.
 - **Cross-Site Request Forgery (CSRF):**
   - Mutating API methods (`POST`, `PUT`, `PATCH`, `DELETE`) require the `X-CSRF-Token` header validated against the session cookie.
-  - Public authentication routes (`/login`, `/register`) are explicitly managed without leaking session tokens.
+  - Public authentication routes (`/login`, `/register`, `/logout`, `/forgot-password`, `/reset-password`) are explicitly exempt.
+  - Authentication endpoints (`login`, `logout`, `me`, `csrf`) synchronize CSRF tokens directly with the frontend client.
+  - The frontend client implements deduplicated in-flight token fetching and an automatic single-retry self-healing mechanism on `csrf_failed` errors, eliminating false-positive token rejections during server restarts or session rotation without weakening security.
 
 ### 2.4 Session Security & Cookies
 - `SESSION_COOKIE_HTTPONLY = True`: Prevents client-side scripts from reading session cookies.
@@ -48,6 +50,13 @@ The Elite Portal architecture was audited for compliance with modern web applica
 ### 2.6 Sensitive Data Exposure
 - **Assessment Integrity:** The `AssessmentOption` model includes an `is_correct` field. In the student-facing `_attempt_payload` function, options are serialized with `option_public()`, which strips `is_correct` until the assessment attempt is submitted and finalized.
 - **Audit Trails:** Sensitive operations (account creation, role alterations, deactivations, grade modifications, point adjustments, domain updates) are recorded in `AuditLog` with `actor_id`, `action`, `target_type`, `target_id`, `old_value`, `new_value`, and UTC timestamp.
+
+### 2.7 Assessment Anti-Cheating & Integrity Monitoring
+- **Proctoring Safeguards:** Clipboard actions (`onCopy`, `onPaste`) and context menus (`onContextMenu`) are disabled on active test runner pages.
+- **Window & Focus Monitoring:** Page visibility changes and window focus loss trigger asynchronous telemetry posts to `/api/v1/attempts/<id>/integrity`. Integrity flags record timestamp, remote IP address, and violation type (`tab_switch`, `window_blur`, `fullscreen_exit`).
+- **Human-in-the-Loop Review:** Integrity flags are surfaced to Faculty and Domain Coordinators during grading; automated score deductions are explicitly avoided to prevent false penalties from accidental browser glitches.
+- **Authorization Override Audit:** Single-student assessment unlocks and proctor session activations require a documented reason, track the authorizer's user ID, and are recorded in `AuditLog`.
+
 
 ---
 

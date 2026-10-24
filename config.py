@@ -39,6 +39,17 @@ class Config:
         SQLALCHEMY_DATABASE_URI = f"sqlite:///{BASE_DIR / 'instance' / 'elite_portal.sqlite3'}"
 
     SQLALCHEMY_TRACK_MODIFICATIONS = False
+    SQLALCHEMY_ENGINE_OPTIONS = (
+        {}
+        if "sqlite" in SQLALCHEMY_DATABASE_URI
+        else {
+            "pool_size": 10,
+            "max_overflow": 20,
+            "pool_recycle": 300,
+            "pool_pre_ping": True,
+            "pool_timeout": 30,
+        }
+    )
 
     MAX_CONTENT_LENGTH = 50 * 1024 * 1024  # 50MB
     SESSION_COOKIE_HTTPONLY = True

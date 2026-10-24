@@ -47,12 +47,7 @@ export default function PointAdjustments() {
     <div>
       <PageHeader
         title="Point Adjustments"
-        subtitle="Request and review corrections to student point totals."
-        actions={
-          <button className="btn-primary" onClick={() => setCreateOpen(true)}>
-            <Plus className="h-4 w-4" /> New adjustment
-          </button>
-        }
+        subtitle="Review and process student point adjustment requests."
       />
 
       <Tabs
@@ -202,7 +197,7 @@ function NewAdjustmentModal({ onClose, onDone }: { onClose: () => void; onDone: 
       <div className="space-y-4">
         {student ? (
           <div className="flex items-center gap-3 rounded-xl border border-brand-200 bg-brand-50/50 p-3">
-            <Avatar name={student.name} size={40} />
+            <Avatar name={student.name} src={student.avatar_url} size={40} />
             <div className="min-w-0 flex-1">
               <p className="text-sm font-medium text-slate-800">{student.name}</p>
               <p className="text-xs text-slate-500">
@@ -236,7 +231,7 @@ function NewAdjustmentModal({ onClose, onDone }: { onClose: () => void; onDone: 
                     className="flex w-full items-center gap-3 border-b border-slate-50 px-3 py-2.5 text-left last:border-0 hover:bg-slate-50"
                     onClick={() => setStudent(s)}
                   >
-                    <Avatar name={s.name} size={32} />
+                    <Avatar name={s.name} src={s.avatar_url} size={32} />
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-sm text-slate-700">{s.name}</p>
                       <p className="truncate text-xs text-slate-400">{s.register_number} · {s.department || "—"}</p>

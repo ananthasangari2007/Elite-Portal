@@ -16,8 +16,7 @@ export default function StudentTasks() {
     <div>
       <PageHeader
         title="Elite Tasks"
-        subtitle={`One submission per business day (${data?.business_date || "today"} IST).`}
-        actions={data?.submitted_today ? <Badge tone="green"><CheckCircle2 className="h-3.5 w-3.5" /> Today's task done</Badge> : null}
+        subtitle={`Submit daily evidence for your assigned tasks. One submission allowed per task each day (${data?.business_date || "today"}).`}
       />
 
       {loading ? (
@@ -59,17 +58,25 @@ export default function StudentTasks() {
                 </div>
               )}
 
-              <div className="mt-auto flex justify-end pt-4">
-                {t.state === "available" ? (
-                  <button className="btn-primary" onClick={() => setTask(t)} disabled={data?.submitted_today}>
+              <div className="mt-auto flex items-center justify-between pt-4">
+                {t.submitted_today ? (
+                  <Badge tone="green">
+                    <CheckCircle2 className="h-3.5 w-3.5" /> Submitted Today
+                  </Badge>
+                ) : (
+                  <span className="text-xs text-slate-400">Due today</span>
+                )}
+
+                {t.can_submit ? (
+                  <button className="btn-primary" onClick={() => setTask(t)}>
                     Submit evidence
                   </button>
-                ) : t.state === "in_progress" ? (
-                  <span className="text-xs text-slate-400">Submit another task tomorrow</span>
+                ) : t.submitted_today ? (
+                  <span className="text-xs font-semibold text-emerald-600">Daily limit reached for this task</span>
                 ) : t.state === "upcoming" ? (
                   <span className="text-xs text-slate-400">Not yet available</span>
                 ) : (
-                  <span className="text-xs text-emerald-600">Reviewed</span>
+                  <span className="text-xs text-slate-400">Closed</span>
                 )}
               </div>
             </Card>

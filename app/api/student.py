@@ -31,6 +31,7 @@ from app.models import (
     Assessment,
     AssessmentAnswer,
     AssessmentAttempt,
+    AssessmentAuthorization,
     AssessmentOption,
     AssessmentQuestion,
     CodingSubmission,
@@ -48,6 +49,7 @@ from app.models import (
 from app.services.portal import (
     active_announcements,
     apply_betting_points,
+    award_points,
     betting_rule,
     business_date,
     can_submit_daily_task,
@@ -55,12 +57,14 @@ from app.services.portal import (
     domain_progress,
     enrolled_domains,
     enrolled_domain_ids,
+    find_ledger_entry,
     iso as iso_dt,
     leaderboard,
     now_utc,
     points_breakdown,
     points_total,
     student_dashboard,
+    student_leaderboard_ranks,
     submit_daily_task,
     today_submission,
 )
@@ -390,6 +394,42 @@ def materials():
 
 
 # ── Assessments ───────────────────────────────────────────────────────────
+def _student_assessment_access(assessment, student_id):
+    now = now_utc()
+    completed_count = AssessmentAttempt.query.filter(
+        AssessmentAttempt.student_id == student_id,
+        AssessmentAttempt.assessment_id == assessment.id,
+        AssessmentAttempt.status != "in_progress",
+    ).count()
+
+    auths = AssessmentAuthorization.query.filter(
+        AssessmentAuthorization.assessment_id == assessment.id,
+        AssessmentAuthorization.is_active == True,
+        (AssessmentAuthorization.student_id == student_id) | (AssessmentAuthorization.student_id.is_(None)),
+    ).all()
+    active_auths = [a for a in auths if not a.valid_until or a.valid_until >= now]
+
+    has_student_unlock = any(a.authorization_type == "student_unlock" and a.student_id == student_id for a in active_auths)
+    has_proctor_open = any(a.authorization_type in ("proctor_open", "admin_release") for a in active_auths)
+
+    extra_attempts = sum(a.extra_attempts for a in active_auths if a.authorization_type == "student_unlock")
+    total_allowed_attempts = assessment.max_attempts + extra_attempts
+    attempts_remaining = max(total_allowed_attempts - completed_count, 0)
+
+    lock_reason = None
+    if assessment.status != "published" and not has_proctor_open:
+        lock_reason = "not_published"
+    elif assessment.scheduled_start and now < assessment.scheduled_start and not has_student_unlock and not has_proctor_open:
+        lock_reason = "scheduled_countdown"
+    elif assessment.scheduled_end and now > assessment.scheduled_end and not has_student_unlock and not has_proctor_open:
+        lock_reason = "window_expired"
+    elif attempts_remaining <= 0:
+        lock_reason = "no_attempts_left"
+
+    is_accessible = (lock_reason is None)
+    return is_accessible, lock_reason, attempts_remaining, completed_count, active_auths
+
+
 @student_api.get("/student/assessments")
 @require_roles("student")
 def assessments():
@@ -419,11 +459,14 @@ def assessments():
         mine = by_assessment.get(a.id, [])
         active = next((x for x in mine if x.status == "in_progress"), None)
         latest = mine[0] if mine else None
+        accessible, lock_reason, remaining, used_count, _ = _student_assessment_access(a, current_user.id)
         result.append(
             {
                 **assessment_public(a),
-                "available": a.is_available,
-                "attempts_used": len([x for x in mine if x.status != "in_progress"]),
+                "available": accessible,
+                "lock_reason": lock_reason,
+                "attempts_used": used_count,
+                "attempts_remaining": remaining,
                 "active_attempt_id": active.id if active else None,
                 "latest_attempt": attempt_public(latest) if latest else None,
                 "is_past": bool(a.scheduled_end and a.scheduled_end < now),
@@ -446,13 +489,18 @@ def assessment_instructions(assessment_id):
     completed = [a for a in attempts if a.status != "in_progress"]
     active = next((a for a in attempts if a.status == "in_progress"), None)
 
+    accessible, lock_reason, remaining, used_count, auths = _student_assessment_access(assessment, current_user.id)
+
     return ok(
         {
             **assessment_public(assessment),
-            "attempts_used": len(completed),
-            "attempts_remaining": max(assessment.max_attempts - len(completed), 0),
+            "available": accessible,
+            "lock_reason": lock_reason,
+            "attempts_used": used_count,
+            "attempts_remaining": remaining,
             "active_attempt_id": active.id if active else None,
             "latest_result": attempt_public(completed[0]) if completed else None,
+            "is_authorized": len(auths) > 0,
         }
     )
 
@@ -473,8 +521,6 @@ def start_attempt(assessment_id):
     if assessment is None:
         raise ApiError("Assessment not found.", 404, "not_found")
     _require_domain(assessment.domain_id)
-    if not assessment.is_available:
-        raise ApiError("This assessment is not currently available.", 403, "not_available")
 
     existing = AssessmentAttempt.query.filter_by(
         student_id=current_user.id, assessment_id=assessment.id, status="in_progress"
@@ -482,13 +528,16 @@ def start_attempt(assessment_id):
     if existing:
         return ok(_attempt_payload(existing, resumed=True))
 
-    used = AssessmentAttempt.query.filter(
-        AssessmentAttempt.student_id == current_user.id,
-        AssessmentAttempt.assessment_id == assessment.id,
-        AssessmentAttempt.status != "in_progress",
-    ).count()
-    if used >= assessment.max_attempts:
-        raise ApiError("You have used all allowed attempts for this assessment.", 403, "no_attempts_left")
+    accessible, lock_reason, remaining, used_count, auths = _student_assessment_access(assessment, current_user.id)
+    if not accessible:
+        if lock_reason == "no_attempts_left":
+            raise ApiError("You have used all allowed attempts for this assessment.", 403, "no_attempts_left")
+        elif lock_reason == "scheduled_countdown":
+            raise ApiError("This assessment has not opened yet.", 403, "scheduled_countdown")
+        elif lock_reason == "window_expired":
+            raise ApiError("The window for this assessment has closed.", 403, "window_expired")
+        else:
+            raise ApiError("This assessment is not currently available.", 403, "not_available")
 
     attempt = AssessmentAttempt(
         assessment_id=assessment.id,
@@ -609,15 +658,71 @@ def submit_attempt(attempt_id):
                 answer.is_correct = False
                 answer.marks_awarded = 0
 
+    for cs in attempt.coding_submissions:
+        score += cs.marks_awarded or 0
+
     attempt.score = score
     attempt.submitted_at = now_utc()
     attempt.time_taken_seconds = int((attempt.submitted_at - attempt.started_at).total_seconds())
-    attempt.status = "graded" if attempt.assessment.assessment_type == "mcq" else "submitted"
-    if attempt.assessment.assessment_type == "betting":
-        apply_betting_points(attempt, created_by=current_user.id)
-    db.session.commit()
 
+    grading_mode = getattr(attempt.assessment, "grading_mode", "automatic") or "automatic"
+    if grading_mode == "automatic" or attempt.assessment.assessment_type in ("mcq", "betting"):
+        attempt.status = "graded"
+        if attempt.assessment.assessment_type == "betting":
+            try:
+                apply_betting_points(attempt, created_by=current_user.id)
+            except Exception:
+                current_app.logger.exception("Failed to apply betting points")
+        else:
+            attendance_pts = getattr(attempt.assessment, "attendance_points", 0) or 0
+            total_pts = score + attendance_pts
+            if total_pts > 0:
+                try:
+                    existing_entry = find_ledger_entry(
+                        student_id=current_user.id,
+                        transaction_type="assessment",
+                        reference_type="AssessmentAttempt",
+                        reference_id=attempt.id,
+                    )
+                    if not existing_entry:
+                        award_points(
+                            student_id=current_user.id,
+                            points=total_pts,
+                            transaction_type="assessment",
+                            domain_id=attempt.assessment.domain_id,
+                            reference_type="AssessmentAttempt",
+                            reference_id=attempt.id,
+                            description=f"Assessment '{attempt.assessment.title}' (Score: {score} pts, Attendance: {attendance_pts} pts)",
+                            created_by=attempt.assessment.created_by or current_user.id,
+                        )
+                except Exception:
+                    current_app.logger.exception("Failed to award assessment points")
+    else:
+        attempt.status = "submitted"
+
+    db.session.commit()
     return ok({"attempt": attempt_public(attempt, include_detail=True)})
+
+
+@student_api.post("/attempts/<int:attempt_id>/run-code")
+@require_roles("student")
+def run_code_test(attempt_id):
+    attempt = db.session.get(AssessmentAttempt, attempt_id)
+    if attempt is None or attempt.student_id != current_user.id:
+        raise ApiError("Attempt not found.", 404, "not_found")
+    if attempt.status != "in_progress":
+        raise ApiError("This attempt is already submitted.", 409, "attempt_closed")
+
+    data = json_body()
+    language = (data.get("language") or "python").strip()
+    code = data.get("code") or ""
+    stdin = data.get("stdin") or data.get("custom_input") or ""
+    if not code.strip():
+        raise ApiError("Code cannot be empty.", 400, "empty_code")
+
+    from app.services.code_runner import run_code
+    result = run_code(language, code, stdin=stdin, timeout_seconds=5.0)
+    return ok(result)
 
 
 @student_api.post("/attempts/<int:attempt_id>/code")
@@ -637,12 +742,16 @@ def submit_code(attempt_id):
     if question.question_type != "coding":
         raise ApiError("This question does not accept code.", 400, "not_coding")
 
-    language = (data.get("language") or "").strip().lower()
+    language = (data.get("language") or "python").strip().lower()
     code = data.get("code") or ""
-    if not language or not code.strip():
-        raise ApiError("Language and code are required.", 400, "invalid_code")
+    if not code.strip():
+        raise ApiError("Code cannot be empty.", 400, "invalid_code")
     if len(code) > 100_000:
         raise ApiError("Code is too large.", 400, "code_too_large")
+
+    from app.services.code_runner import evaluate_test_cases
+    test_cases = question.test_cases.all()
+    eval_result = evaluate_test_cases(language, code, test_cases)
 
     submission = CodingSubmission.query.filter_by(attempt_id=attempt.id, question_id=question.id).first()
     if submission is None:
@@ -650,17 +759,23 @@ def submit_code(attempt_id):
         db.session.add(submission)
     submission.language = language
     submission.code = code
-    submission.status = "pending"
-    submission.test_results = []
+    submission.status = "passed" if eval_result["all_passed"] else "failed"
+    submission.test_results = eval_result["results"]
+    max_marks = question.marks or 10
+    submission.marks_awarded = int((eval_result["score_percent"] / 100) * max_marks)
     submission.submitted_at = now_utc()
     db.session.commit()
 
-    # No sandboxed execution service is configured; do not pretend the code ran.
     return ok(
         {
-            "message": "Code saved. A configured execution service will evaluate it, or a coordinator will review it.",
-            "execution": "unconfigured",
+            "message": f"Code evaluated: {eval_result['passed']}/{eval_result['total']} test cases passed.",
+            "execution": "evaluated",
             "submission_id": submission.id,
+            "status": submission.status,
+            "marks_awarded": submission.marks_awarded,
+            "results": eval_result["results"],
+            "passed": eval_result["passed"],
+            "total": eval_result["total"],
         }
     )
 
@@ -740,21 +855,33 @@ def elite_tasks():
         .order_by(EliteTask.due_date.asc().nulls_last())
         .all()
     )
-    todays = today_submission(current_user.id)
-    evidences = {
-        e.task_id: e for e in TaskEvidence.query.filter_by(student_id=current_user.id).all()
+    b_date = business_date()
+    today_evidences = {
+        e.task_id: e
+        for e in TaskEvidence.query.filter_by(
+            student_id=current_user.id, submission_date=b_date
+        ).all()
     }
+    all_evidences = {
+        e.task_id: e
+        for e in TaskEvidence.query.filter_by(student_id=current_user.id)
+        .order_by(TaskEvidence.submitted_at.desc())
+        .all()
+    }
+
     rows = []
     for t in tasks:
-        evidence = evidences.get(t.id)
-        if evidence:
+        today_ev = today_evidences.get(t.id)
+        latest_ev = all_evidences.get(t.id)
+        is_available = _task_available(t, domain_ids)
+
+        if today_ev:
             state = "completed"
-        elif todays is not None:
-            state = "in_progress"
-        elif _task_available(t, domain_ids):
+        elif is_available:
             state = "available"
         else:
             state = "upcoming" if t.status != "completed" else "completed"
+
         rows.append(
             {
                 "id": t.id,
@@ -770,10 +897,12 @@ def elite_tasks():
                 "due_date": iso(t.due_date),
                 "publish_at": iso(t.publish_at),
                 "state": state,
-                "submission": evidence_public(evidence) if evidence else None,
+                "submitted_today": today_ev is not None,
+                "can_submit": today_ev is None and is_available,
+                "submission": evidence_public(today_ev or latest_ev) if (today_ev or latest_ev) else None,
             }
         )
-    return ok({"tasks": rows, "submitted_today": todays is not None, "business_date": business_date().isoformat()})
+    return ok({"tasks": rows, "business_date": b_date.isoformat()})
 
 
 @student_api.get("/student/tasks/submissions")
@@ -796,7 +925,7 @@ def submit_task(task_id):
     if not _task_available(task, domain_ids):
         raise ApiError("This task is not available.", 403, "task_unavailable")
 
-    allowed, message = can_submit_daily_task(current_user.id)
+    allowed, message = can_submit_daily_task(current_user.id, task_id=task.id)
     if not allowed:
         raise ApiError(message, 409, "daily_limit")
 
@@ -914,8 +1043,11 @@ def my_appeals():
     from app.models import Appeal
 
     rows = Appeal.query.filter_by(student_id=current_user.id).order_by(Appeal.created_at.desc()).all()
-    return ok(
-        [
+    result = []
+    for a in rows:
+        reviewer_name = a.assigned_reviewer.name if a.assigned_reviewer else None
+        reviewer_email = a.assigned_reviewer.email if a.assigned_reviewer else None
+        result.append(
             {
                 "id": a.id,
                 "attempt_id": a.attempt_id,
@@ -926,13 +1058,20 @@ def my_appeals():
                 "status": a.status,
                 "decision": a.decision,
                 "new_score": a.new_score,
+                "assigned_to": a.assigned_to,
+                "assigned_reviewer": reviewer_name,
+                "assigned_reviewer_email": reviewer_email,
+                "instruction_message": (
+                    f"You are instructed to meet the faculty {reviewer_name} ({reviewer_email})."
+                    if a.assigned_to and reviewer_name
+                    else None
+                ),
                 "review_comments": a.review_comments,
                 "created_at": iso(a.created_at),
                 "resolved_at": iso(a.resolved_at),
             }
-            for a in rows
-        ]
-    )
+        )
+    return ok(result)
 
 
 @student_api.post("/student/appeals")
@@ -1045,13 +1184,35 @@ def leaderboards():
         raise ApiError("Authentication required.", 401, "unauthenticated")
     scope = (request.args.get("scope") or "overall").lower()
     domain_id = get_int(request.args.get("domain_id"), None, name="domain_id")
+    department = (request.args.get("department") or "").strip() or None
     month = request.args.get("month")
-    rows = leaderboard(scope=scope, domain_id=domain_id, month=month)
+    limit = get_int(request.args.get("limit"), 20, minimum=1, maximum=100, name="limit")
+
+    # If student, restrict domain queries strictly to enrolled domains
+    if current_user.role == "student" and domain_id:
+        enrolled_ids = enrolled_domain_ids(current_user.id)
+        if domain_id not in enrolled_ids:
+            domain_id = enrolled_ids[0] if enrolled_ids else None
+
+    rows = leaderboard(
+        scope=scope,
+        domain_id=domain_id,
+        month=month,
+        department=department,
+        limit=limit,
+    )
+    my_ranks = (
+        student_leaderboard_ranks(current_user.id)
+        if current_user.role == "student"
+        else None
+    )
     return ok(
         {
             "scope": scope,
             "month": month,
+            "department": department,
             "entries": rows,
             "me": next((r for r in rows if r["student_id"] == current_user.id), None),
+            "my_ranks": my_ranks,
         }
     )

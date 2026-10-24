@@ -123,7 +123,13 @@ export default function ContentBuilder() {
         fd.append("file", matForm.file);
         fd.append("folder", "materials");
         const up = await api.upload<any>("/uploads", fd);
-        payload = { ...payload, file_key: up.key, file_name: up.file_name, file_size: up.file_size, url: up.url || payload.url };
+        payload = {
+          ...payload,
+          file_key: up.file_key || up.key,
+          file_name: up.file_name,
+          file_size: up.file_size,
+          url: up.url || up.preview_url || payload.url,
+        };
       }
       await api.post(`/coordinator/days/${dayId}/materials`, payload);
       setShowMatModal(false);

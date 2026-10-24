@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useState, type ReactNode } from "react";
-import { CheckCircle2, Info, X, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Info, X, XCircle } from "lucide-react";
 
-type ToastKind = "success" | "error" | "info";
+type ToastKind = "success" | "error" | "info" | "warning";
 type Toast = { id: number; kind: ToastKind; message: string };
 
 const ToastContext = createContext<{ push: (message: string, kind?: ToastKind) => void } | null>(null);
@@ -29,11 +29,14 @@ export function ToastProvider({ children }: { children: ReactNode }) {
                 ? "border-l-emerald-500"
                 : toast.kind === "error"
                 ? "border-l-red-500"
+                : toast.kind === "warning"
+                ? "border-l-amber-500"
                 : "border-l-brand-500"
             }`}
           >
             {toast.kind === "success" && <CheckCircle2 className="h-5 w-5 text-emerald-500 mt-0.5 shrink-0" />}
             {toast.kind === "error" && <XCircle className="h-5 w-5 text-red-500 mt-0.5 shrink-0" />}
+            {toast.kind === "warning" && <AlertTriangle className="h-5 w-5 text-amber-500 mt-0.5 shrink-0" />}
             {toast.kind === "info" && <Info className="h-5 w-5 text-brand-500 mt-0.5 shrink-0" />}
             <p className="text-sm text-slate-700 flex-1">{toast.message}</p>
             <button onClick={() => dismiss(toast.id)} className="text-slate-400 hover:text-slate-600">

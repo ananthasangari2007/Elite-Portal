@@ -1,4 +1,5 @@
-import { Award, Coins, Gift, RotateCcw, ShieldCheck, Target, TrendingDown, TrendingUp } from "lucide-react";
+import { Link } from "react-router-dom";
+import { Award, Coins, Gift, RotateCcw, Scale, ShieldCheck, Target, TrendingDown, TrendingUp } from "lucide-react";
 import { useApi } from "../../lib/hooks";
 import { formatPoints, formatDateTime, humanize } from "../../lib/format";
 import { Badge, Card, EmptyState, MetricCard, PageHeader, PageLoader } from "../../components/ui";
@@ -10,7 +11,15 @@ export default function StudentPoints() {
 
   return (
     <div>
-      <PageHeader title="Points & Rewards" subtitle="Your complete points breakdown and transaction history." />
+      <PageHeader
+        title="Points & Rewards"
+        subtitle="Your complete points breakdown and transaction history."
+        actions={
+          <Link to="/student/appeals" className="btn-secondary">
+            <Scale className="h-4 w-4" /> Raise Point Appeal
+          </Link>
+        }
+      />
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <MetricCard label="Total Points" value={formatPoints(s.total)} icon={<Award className="h-5 w-5" />} tone="brand" />

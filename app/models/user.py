@@ -21,6 +21,7 @@ class User(UserMixin, db.Model):
     has_active_sprint_penalty = db.Column(db.Boolean, default=False, nullable=False, index=True)
     profile_completed = db.Column(db.Boolean, default=False, nullable=False)
     register_number = db.Column(db.String(80), index=True)
+    phone_number = db.Column(db.String(30))
     department = db.Column(db.String(120), index=True)
     year = db.Column(db.Integer)
     section = db.Column(db.String(10))

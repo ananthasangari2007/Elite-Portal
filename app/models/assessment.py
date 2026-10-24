@@ -14,6 +14,11 @@ class Assessment(db.Model):
     description = db.Column(db.Text)
     assessment_type = db.Column(db.String(30), nullable=False, index=True)
     # Types: mcq | coding | betting
+    grading_mode = db.Column(db.String(30), default="automatic", nullable=False)
+    # automatic | manual
+    attendance_points = db.Column(db.Integer, default=5, nullable=False)
+    allowed_languages = db.Column(db.JSON, default=list, nullable=True)
+    # List of allowed compilers/languages: e.g. ["python3", "c", "cpp", "java", "javascript", "web"]
     total_marks = db.Column(db.Integer, default=0, nullable=False)
     time_limit_minutes = db.Column(db.Integer)
     max_attempts = db.Column(db.Integer, default=1, nullable=False)
@@ -191,3 +196,25 @@ class CodingSubmission(db.Model):
 
     attempt = db.relationship("AssessmentAttempt", back_populates="coding_submissions")
     question = db.relationship("AssessmentQuestion")
+
+
+class AssessmentAuthorization(db.Model):
+    """Overrides or authorizations for assessments (single-student unlock, proctor open, admin release)."""
+    __tablename__ = "assessment_authorization"
+
+    id = db.Column(db.Integer, primary_key=True)
+    assessment_id = db.Column(db.Integer, db.ForeignKey("assessment.id"), nullable=False, index=True)
+    student_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True, index=True)
+    authorized_by = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False, index=True)
+    authorization_type = db.Column(db.String(50), nullable=False, default="student_unlock")
+    # Types: student_unlock | proctor_open | admin_release
+    extra_attempts = db.Column(db.Integer, default=1, nullable=False)
+    valid_until = db.Column(db.DateTime, nullable=True)
+    reason = db.Column(db.Text)
+    is_active = db.Column(db.Boolean, default=True, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    assessment = db.relationship("Assessment", backref=db.backref("authorizations", lazy="dynamic"))
+    student = db.relationship("User", foreign_keys=[student_id])
+    authorizer = db.relationship("User", foreign_keys=[authorized_by])
+

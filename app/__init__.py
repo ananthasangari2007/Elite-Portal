@@ -89,6 +89,7 @@ def register_api_security(app):
 
     csrf_exempt_paths = {
         "/api/v1/auth/login",
+        "/api/v1/auth/logout",
         "/api/v1/auth/forgot-password",
         "/api/v1/auth/reset-password",
         "/api/v1/auth/register",
@@ -101,7 +102,8 @@ def register_api_security(app):
         if request.method == "OPTIONS":
             return ("", 204)
         if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
-            if request.path not in csrf_exempt_paths:
+            normalized_path = request.path.rstrip("/")
+            if normalized_path not in csrf_exempt_paths:
                 require_csrf()
         return None
 

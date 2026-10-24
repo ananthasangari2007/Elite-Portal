@@ -1,13 +1,16 @@
 """Faculty Coordinator API — grading queue, appeals, point adjustments, requests."""
 from __future__ import annotations
 
+from datetime import timedelta
 from flask import Blueprint, request
 from flask_login import current_user
 
 from app import db
 from app.api.utils import (
     ApiError,
+    assessment_public,
     attempt_public,
+    authorization_public,
     domain_public,
     evidence_public,
     get_int,
@@ -19,7 +22,9 @@ from app.api.utils import (
 )
 from app.models import (
     Appeal,
+    Assessment,
     AssessmentAttempt,
+    AssessmentAuthorization,
     Domain,
     GradingHistory,
     PointAdjustmentRequest,
@@ -159,6 +164,8 @@ def review_evidence(evidence_id):
 
 # ── Appeals ───────────────────────────────────────────────────────────────
 def _appeal_payload(appeal):
+    assigned_name = appeal.assigned_reviewer.name if appeal.assigned_reviewer else None
+    assigned_email = appeal.assigned_reviewer.email if appeal.assigned_reviewer else None
     return {
         "id": appeal.id,
         "student_id": appeal.student_id,
@@ -177,7 +184,13 @@ def _appeal_payload(appeal):
         "supporting_info": appeal.supporting_info,
         "status": appeal.status,
         "assigned_to": appeal.assigned_to,
-        "assigned_reviewer": appeal.assigned_reviewer.name if appeal.assigned_reviewer else None,
+        "assigned_reviewer": assigned_name,
+        "assigned_reviewer_email": assigned_email,
+        "instruction_message": (
+            f"You are instructed to meet the faculty {assigned_name} ({assigned_email})"
+            if appeal.assigned_to and assigned_name
+            else None
+        ),
         "review_comments": appeal.review_comments,
         "decision": appeal.decision,
         "new_score": appeal.new_score,
@@ -211,6 +224,14 @@ def assign_appeal(appeal_id):
     appeal.assigned_to = current_user.id
     if appeal.status == "open":
         appeal.status = "in_review"
+
+    # Immediately notify the student that they are instructed to meet the faculty
+    notify(
+        appeal.student_id,
+        "Appeal Under Review — Action Required",
+        f"You are instructed to meet the faculty {current_user.name} ({current_user.email}) regarding your appeal.",
+        link_url="/student/appeals",
+    )
     db.session.commit()
     return ok(_appeal_payload(appeal))
 
@@ -480,3 +501,127 @@ def analytics():
     from app.api.coordinator import analytics as coordinator_analytics
 
     return coordinator_analytics()
+
+
+# ── Assessment Authorization Desk ─────────────────────────────────────────
+@faculty_api.get("/faculty/assessments")
+@require_roles("faculty", "coordinator", "admin")
+def list_faculty_assessments():
+    from app.services.portal import domain_ids_for
+    ids = domain_ids_for(current_user) if current_user.role != "admin" else None
+    query = Assessment.query
+    if ids is not None:
+        query = query.filter(Assessment.domain_id.in_(ids or [-1]))
+    rows = query.order_by(Assessment.created_at.desc()).all()
+    return ok([assessment_public(a) for a in rows])
+
+
+@faculty_api.get("/faculty/authorizations")
+@require_roles("faculty", "coordinator", "admin")
+def list_authorizations():
+    auths = AssessmentAuthorization.query.order_by(AssessmentAuthorization.created_at.desc()).all()
+    return ok([authorization_public(a) for a in auths])
+
+
+@faculty_api.post("/faculty/assessments/<int:assessment_id>/authorize-student")
+@require_roles("faculty", "coordinator", "admin")
+def authorize_student(assessment_id):
+    assessment = db.session.get(Assessment, assessment_id)
+    if assessment is None:
+        raise ApiError("Assessment not found.", 404, "not_found")
+    data = json_body()
+    student_id = get_int(data.get("student_id"), name="student_id")
+    student = db.session.get(User, student_id)
+    if student is None or student.role != "student":
+        raise ApiError("Student not found.", 404, "student_not_found")
+    _assert_in_scope(student.id)
+
+    reason = (data.get("reason") or "Faculty override authorization").strip()
+    extra_attempts = get_int(data.get("extra_attempts"), 1, minimum=1, name="extra_attempts")
+    valid_minutes = get_int(data.get("valid_minutes"), None, minimum=1, name="valid_minutes")
+    valid_until = (now_utc() + timedelta(minutes=valid_minutes)) if valid_minutes else None
+
+    auth = AssessmentAuthorization(
+        assessment_id=assessment.id,
+        student_id=student.id,
+        authorized_by=current_user.id,
+        authorization_type="student_unlock",
+        extra_attempts=extra_attempts,
+        valid_until=valid_until,
+        reason=reason,
+        is_active=True,
+    )
+    db.session.add(auth)
+    audit(
+        current_user.id,
+        "assessment.student_unlock",
+        target_type="Assessment",
+        target_id=assessment.id,
+        description=f"Unlocked for {student.name}: {reason}",
+    )
+    notify(
+        student.id,
+        "Assessment Unlocked",
+        f"You have been granted access to attempt '{assessment.title}'. Reason: {reason}",
+        "info",
+        link_url=f"/student/assessments",
+    )
+    db.session.commit()
+    return ok(authorization_public(auth), 201)
+
+
+@faculty_api.post("/faculty/assessments/<int:assessment_id>/open-proctor")
+@require_roles("faculty", "coordinator", "admin")
+def open_proctor(assessment_id):
+    assessment = db.session.get(Assessment, assessment_id)
+    if assessment is None:
+        raise ApiError("Assessment not found.", 404, "not_found")
+    data = json_body(required=False) or {}
+    reason = (data.get("reason") or "Proctored in-person session opened").strip()
+    valid_minutes = get_int(data.get("valid_minutes"), None, minimum=1, name="valid_minutes")
+    valid_until = (now_utc() + timedelta(minutes=valid_minutes)) if valid_minutes else None
+
+    if assessment.status != "published":
+        assessment.status = "published"
+        if not assessment.published_at:
+            assessment.published_at = now_utc()
+
+    auth = AssessmentAuthorization(
+        assessment_id=assessment.id,
+        student_id=None,
+        authorized_by=current_user.id,
+        authorization_type="proctor_open",
+        extra_attempts=0,
+        valid_until=valid_until,
+        reason=reason,
+        is_active=True,
+    )
+    db.session.add(auth)
+    audit(
+        current_user.id,
+        "assessment.proctor_open",
+        target_type="Assessment",
+        target_id=assessment.id,
+        description=f"Proctor opened assessment '{assessment.title}': {reason}",
+    )
+    db.session.commit()
+    return ok(authorization_public(auth), 201)
+
+
+@faculty_api.delete("/faculty/authorizations/<int:auth_id>")
+@require_roles("faculty", "coordinator", "admin")
+def revoke_authorization(auth_id):
+    auth = db.session.get(AssessmentAuthorization, auth_id)
+    if auth is None:
+        raise ApiError("Authorization record not found.", 404, "not_found")
+    auth.is_active = False
+    audit(
+        current_user.id,
+        "assessment.auth_revoked",
+        target_type="AssessmentAuthorization",
+        target_id=auth.id,
+        description=f"Revoked authorization for assessment {auth.assessment_id}",
+    )
+    db.session.commit()
+    return ok({"message": "Authorization revoked."})
+

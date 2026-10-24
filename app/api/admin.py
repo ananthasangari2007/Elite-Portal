@@ -26,6 +26,7 @@ from app.api.utils import (
 from app.models import (
     Announcement,
     Assessment,
+    AssessmentAuthorization,
     AuditLog,
     Domain,
     DomainAssignment,
@@ -384,6 +385,37 @@ def reopen_assessment(assessment_id):
     )
     db.session.commit()
     return ok(assessment_public(assessment))
+
+
+@admin_api.post("/admin/assessments/<int:assessment_id>/auto-release")
+@require_roles("admin")
+def auto_release_assessment(assessment_id):
+    assessment = db.session.get(Assessment, assessment_id)
+    if assessment is None:
+        raise ApiError("Assessment not found.", 404, "not_found")
+    assessment.status = "published"
+    if not assessment.published_at:
+        assessment.published_at = now_utc()
+    auth = AssessmentAuthorization(
+        assessment_id=assessment.id,
+        student_id=None,
+        authorized_by=current_user.id,
+        authorization_type="admin_release",
+        extra_attempts=0,
+        reason="Admin auto-release override",
+        is_active=True,
+    )
+    db.session.add(auth)
+    audit(
+        current_user.id,
+        "assessment.auto_release",
+        target_type="Assessment",
+        target_id=assessment.id,
+        description=f"Assessment '{assessment.title}' auto-released by admin",
+    )
+    db.session.commit()
+    return ok({"message": "Assessment auto-released.", "assessment": assessment_public(assessment)})
+
 
 
 # ── Elite Tasks ───────────────────────────────────────────────────────────

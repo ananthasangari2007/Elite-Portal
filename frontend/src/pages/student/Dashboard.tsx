@@ -1,5 +1,6 @@
 import { Link } from "react-router-dom";
 import {
+  AlertTriangle,
   Award,
   BookOpen,
   CalendarClock,
@@ -33,6 +34,34 @@ export default function StudentDashboard() {
           </Link>
         }
       />
+
+      {/* Faculty Meeting Instructions Notice */}
+      {data.faculty_instructions && data.faculty_instructions.length > 0 && (
+        <div className="mb-6 space-y-3">
+          {data.faculty_instructions.map((ins: any) => (
+            <div
+              key={ins.id}
+              className="flex items-start justify-between gap-3 rounded-2xl border border-amber-300 bg-amber-50/90 p-4 text-amber-950 shadow-sm"
+            >
+              <div className="flex items-start gap-3">
+                <AlertTriangle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-bold text-sm">Action Required: Meet Assigned Faculty</p>
+                  <p className="text-xs text-amber-900 mt-0.5">
+                    You are instructed to meet faculty <strong>{ins.faculty_name}</strong> {ins.faculty_email && `(${ins.faculty_email})`} regarding your appeal for <strong>{ins.assessment}</strong>.
+                  </p>
+                </div>
+              </div>
+              <Link
+                to="/student/appeals"
+                className="shrink-0 rounded-xl bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-500 transition shadow-sm"
+              >
+                View Appeal
+              </Link>
+            </div>
+          ))}
+        </div>
+      )}
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <MetricCard label="Total Points" value={formatPoints(data.total_points)} icon={<Award className="h-5 w-5" />} tone="brand" />
