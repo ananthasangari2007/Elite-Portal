@@ -85,7 +85,11 @@ def get_csrf(request: Request):
 
 @router.get("/me")
 def me(request: Request):
-    user = get_current_user_optional(request)
+    try:
+        user = get_current_user_optional(request)
+    except Exception:
+        db.session.rollback()
+        user = get_current_user_optional(request)
     if not user:
         raise ApiError("Authentication required.", 401, "unauthenticated")
 
@@ -124,7 +128,12 @@ def login(payload: LoginPayload, request: Request, response: Response):
     if not email or not password:
         raise ApiError("Email and password are required.", 400, "missing_credentials")
 
-    user = User.query.filter_by(email=email).first()
+    try:
+        user = User.query.filter_by(email=email).first()
+    except Exception:
+        db.session.rollback()
+        user = User.query.filter_by(email=email).first()
+
     if user is None or not user.check_password(password):
         raise ApiError("Incorrect email or password. Please try again.", 401, "invalid_credentials")
 
@@ -159,7 +168,14 @@ def login(payload: LoginPayload, request: Request, response: Response):
     session_token = create_session_token(user.id, csrf_val)
 
     user.last_login = now_utc()
-    db.session.commit()
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        user = User.query.filter_by(email=email).first()
+        if user:
+            user.last_login = now_utc()
+            db.session.commit()
 
     redirect_path = {
         "student": "/student",

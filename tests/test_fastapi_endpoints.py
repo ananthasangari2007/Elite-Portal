@@ -184,3 +184,27 @@ def test_logout_clears_session(client):
     # After logout, /auth/me returns 401
     me_after = client.get("/api/v1/auth/me")
     assert me_after.status_code == 401
+
+
+def test_resilient_login_after_stale_session(client):
+    # Perform login
+    res = client.post(
+        "/api/v1/auth/login",
+        json={"email": "student@fxec.ac.in", "password": "Student@1234", "portal": "student"},
+    )
+    assert res.status_code == 200
+
+    # Subsequent login with wrong password returns 401 (never 500)
+    res_bad = client.post(
+        "/api/v1/auth/login",
+        json={"email": "student@fxec.ac.in", "password": "WrongPassword", "portal": "student"},
+    )
+    assert res_bad.status_code == 401
+    assert res_bad.json()["error"]["code"] == "invalid_credentials"
+
+    # Another login with correct credentials still succeeds (clean session)
+    res_retry = client.post(
+        "/api/v1/auth/login",
+        json={"email": "student@fxec.ac.in", "password": "Student@1234", "portal": "student"},
+    )
+    assert res_retry.status_code == 200

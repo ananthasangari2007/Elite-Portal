@@ -28,6 +28,20 @@ if "sqlite" in db_url:
             connect_args={"check_same_thread": False},
         )
 else:
+    # Optimized for Neon serverless PostgreSQL
+    engine_options.setdefault("pool_pre_ping", True)
+    engine_options["pool_recycle"] = 45  # Recycle connections after 45s of idle
+    engine_options["pool_timeout"] = 20
+    engine_options.setdefault("pool_size", 10)
+    engine_options.setdefault("max_overflow", 20)
+
+    connect_args = dict(engine_options.get("connect_args", {}))
+    connect_args.setdefault("keepalives", 1)
+    connect_args.setdefault("keepalives_idle", 30)
+    connect_args.setdefault("keepalives_interval", 10)
+    connect_args.setdefault("keepalives_count", 5)
+    engine_options["connect_args"] = connect_args
+
     engine = create_engine(db_url, **engine_options)
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -47,8 +61,23 @@ for attr in dir(models):
 
 
 def get_db():
-    """FastAPI dependency for scoped db session."""
+    """FastAPI dependency for scoped db session with rollback and removal."""
+    try:
+        if db.session.is_active:
+            db.session.rollback()
+    except Exception:
+        db.session.remove()
+
     try:
         yield db.session
+    except Exception:
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
+        raise
     finally:
-        db.session.remove()
+        try:
+            db.session.remove()
+        except Exception:
+            pass

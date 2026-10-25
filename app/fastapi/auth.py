@@ -112,7 +112,12 @@ def get_current_user_optional(request: Request) -> Optional[User]:
     except (ValueError, TypeError):
         return None
 
-    user = db.session.get(User, user_id)
+    try:
+        user = db.session.get(User, user_id)
+    except Exception:
+        db.session.rollback()
+        user = db.session.get(User, user_id)
+
     if not user or not user.is_active_account:
         return None
 
@@ -132,7 +137,14 @@ def get_current_user(request: Request) -> User:
 def require_roles(*roles: str) -> Callable:
     """Dependency factory enforcing one of the allowed roles."""
     def role_checker(request: Request) -> User:
-        user = get_current_user(request)
+        try:
+            user = get_current_user(request)
+        except ApiError:
+            raise
+        except Exception:
+            db.session.rollback()
+            user = get_current_user(request)
+
         if roles and user.role not in roles:
             raise ApiError("You do not have permission to perform this action.", 403, "forbidden")
         return user

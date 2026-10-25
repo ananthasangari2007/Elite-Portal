@@ -11,7 +11,7 @@ import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -19,7 +19,7 @@ from sqlalchemy import text
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from config import Config
-from app.fastapi.database import db
+from app.fastapi.database import db, get_db
 from app.fastapi.utils import ApiError, fail
 
 # Import routers
@@ -66,6 +66,7 @@ def create_app() -> FastAPI:
         redoc_url="/api/redoc",
         openapi_url="/api/openapi.json",
         lifespan=lifespan,
+        dependencies=[Depends(get_db)],
     )
 
     # ── CORS Middleware ────────────────────────────────────────────────────────
@@ -102,10 +103,17 @@ def create_app() -> FastAPI:
         try:
             response = await call_next(request)
         except Exception:
+            try:
+                db.session.rollback()
+                db.session.remove()
+            except Exception:
+                pass
             raise
         finally:
-            # Ensure scoped session is returned to pool at end of every request
-            db.session.remove()
+            try:
+                db.session.remove()
+            except Exception:
+                pass
 
         duration_ms = (time.perf_counter() - start_time) * 1000
         response.headers["X-Request-ID"] = req_id
@@ -135,6 +143,11 @@ def create_app() -> FastAPI:
     @app.exception_handler(Exception)
     async def handle_general_exception(request: Request, exc: Exception):
         logger.exception(f"Unhandled exception on {request.method} {request.url.path}")
+        try:
+            db.session.rollback()
+            db.session.remove()
+        except Exception:
+            pass
         return JSONResponse(
             status_code=500,
             content={"error": {"code": "server_error", "message": "An internal server error occurred."}},
