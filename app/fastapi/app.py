@@ -147,8 +147,12 @@ def create_app() -> FastAPI:
         db_status = "ok"
         try:
             db.session.execute(text("SELECT 1"))
-        except Exception as e:
-            db_status = f"unhealthy: {e.__class__.__name__}"
+        except Exception:
+            db.session.rollback()
+            try:
+                db.session.execute(text("SELECT 1"))
+            except Exception as e:
+                db_status = f"unhealthy: {e.__class__.__name__}"
         return {
             "status": "ok" if db_status == "ok" else "degraded",
             "database": db_status,
