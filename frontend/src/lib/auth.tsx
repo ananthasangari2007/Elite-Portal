@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import { api, clearCsrf, ensureCsrf, setCsrfToken, setStoredToken } from "./api";
+import { api, ApiError, clearCsrf, ensureCsrf, hasSessionCandidate, setCsrfToken, setStoredToken } from "./api";
+import { invalidateCache } from "./hooks";
 
 export type Role = "student" | "coordinator" | "faculty" | "admin";
 
@@ -24,6 +25,8 @@ export type User = {
 type AuthState = {
   user: User | null;
   loading: boolean;
+  /** Set when the session could not be verified because of a network/server problem (not a 401). */
+  authError: string | null;
   login: (email: string, password: string, portal: Role) => Promise<User>;
   logout: () => Promise<void>;
   refresh: () => Promise<void>;
@@ -40,48 +43,65 @@ export const PORTAL_HOME: Record<Role, string> = {
   admin: "/admin",
 };
 
-let activeRefreshPromise: Promise<void> | null = null;
+// Shared across StrictMode double-mounts so only one /auth/me request is in flight.
+let activeRefresh: Promise<{ user: User | null; error: string | null }> | null = null;
+
+function checkSession(): Promise<{ user: User | null; error: string | null }> {
+  if (activeRefresh) return activeRefresh;
+  activeRefresh = (async () => {
+    // Signed-out visitors: skip the probe entirely (previously every visit logged a 401).
+    if (!hasSessionCandidate()) return { user: null, error: null };
+    try {
+      const res = await api.get<{ user: User; csrf_token?: string }>("/auth/me");
+      if (res?.csrf_token) setCsrfToken(res.csrf_token);
+      return { user: res?.user ?? null, error: null };
+    } catch (err) {
+      if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
+        // Genuinely signed out / deactivated: clear client state once; no retry loop.
+        setStoredToken(null);
+        clearCsrf();
+        return { user: null, error: null };
+      }
+      // Network failure, timeout or 5xx: keep the stored session and let the user retry.
+      return { user: null, error: err instanceof ApiError ? err.message : "Could not verify your session." };
+    } finally {
+      activeRefresh = null;
+    }
+  })();
+  return activeRefresh;
+}
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [authError, setAuthError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
-    if (activeRefreshPromise) {
-      return activeRefreshPromise;
-    }
-
-    activeRefreshPromise = (async () => {
-      try {
-        const res = await api.get<{ user: User; csrf_token?: string; token?: string } | null>("/auth/me");
-        if (res?.csrf_token) {
-          setCsrfToken(res.csrf_token);
-        } else {
-          await ensureCsrf();
-        }
-        if (res?.token) {
-          setStoredToken(res.token);
-        }
-        setUser(res?.user ?? null);
-      } catch {
-        setUser(null);
-        setStoredToken(null);
-      } finally {
-        activeRefreshPromise = null;
-      }
-    })();
-
-    return activeRefreshPromise;
+    setLoading(true);
+    const result = await checkSession();
+    setUser(result.user);
+    setAuthError(result.error);
+    setLoading(false);
   }, []);
 
   useEffect(() => {
-    refresh().finally(() => setLoading(false));
-  }, [refresh]);
+    let active = true;
+    checkSession().then((result) => {
+      if (!active) return;
+      setUser(result.user);
+      setAuthError(result.error);
+      setLoading(false);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useEffect(() => {
     const handler = () => {
       clearCsrf();
       setStoredToken(null);
+      invalidateCache();
       setUser(null);
     };
     window.addEventListener("elite:unauthorized", handler);
@@ -90,14 +110,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback(async (email: string, password: string, portal: Role) => {
     const data = await api.post<{ user: User; csrf_token?: string; token?: string }>("/auth/login", { email, password, portal });
-    if (data.token) {
-      setStoredToken(data.token);
-    }
+    invalidateCache();
+    setStoredToken(data.token ?? null);
     if (data.csrf_token) {
       setCsrfToken(data.csrf_token);
     } else {
       await ensureCsrf(true);
     }
+    setAuthError(null);
     setUser(data.user);
     return data.user;
   }, []);
@@ -105,15 +125,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = useCallback(async () => {
     try {
       const data = await api.post<{ csrf_token?: string }>("/auth/logout");
-      if (data?.csrf_token) {
-        setCsrfToken(data.csrf_token);
-      } else {
-        clearCsrf();
-      }
+      if (data?.csrf_token) setCsrfToken(data.csrf_token);
+      else clearCsrf();
     } catch {
       clearCsrf();
     } finally {
       setStoredToken(null);
+      invalidateCache();
       setUser(null);
     }
   }, []);
@@ -121,8 +139,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const hasRole = useCallback((...roles: Role[]) => !!user && roles.includes(user.role), [user]);
 
   const value = useMemo(
-    () => ({ user, loading, login, logout, refresh, setUser, hasRole }),
-    [user, loading, login, logout, refresh, hasRole]
+    () => ({ user, loading, authError, login, logout, refresh, setUser, hasRole }),
+    [user, loading, authError, login, logout, refresh, hasRole]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

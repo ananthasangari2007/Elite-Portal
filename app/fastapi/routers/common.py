@@ -16,12 +16,15 @@ from app.fastapi.utils import iso, ok
 from app.models.platform import Notification, RequestMessage, StudentRequest, TaskEvidence
 from app.models.user import User
 from app.services.portal import notify, now_utc
+from app.services.roster import roster_enabled
 from app.services.storage import (
     ALLOWED_EXTENSIONS,
     file_url,
     r2_configured,
     read_local,
+    StorageError,
     save_file,
+    validate_upload,
 )
 from config import Config
 
@@ -112,6 +115,7 @@ def public_config():
                 {"key": "admin", "label": "Admin Login", "description": "Manage users, domains, platform settings, and reports."},
             ],
             "storage": "r2" if r2_configured() else "local",
+            "roster_verification": roster_enabled(),
         }
     )
 
@@ -139,9 +143,13 @@ def upload(
 
     max_bytes = int(getattr(Config, "MAX_UPLOAD_BYTES", 25 * 1024 * 1024))
     try:
+        validate_upload(file, max_bytes=max_bytes)
         meta = save_file(file, folder=target_folder)
     except ValueError as exc:
         raise ApiError(str(exc), 400, "invalid_file") from exc
+    except StorageError as exc:
+        # Never report a successful upload when the storage backend failed.
+        raise ApiError(str(exc), 503, "storage_unavailable") from exc
     return ok(meta, 201)
 
 

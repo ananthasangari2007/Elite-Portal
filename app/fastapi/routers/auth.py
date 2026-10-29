@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import secrets
 from typing import Optional
 
@@ -13,17 +14,30 @@ from app.fastapi.auth import (
     ApiError,
     clear_session_cookie,
     create_session_token,
+    current_session,
     get_csrf_token,
     get_current_user,
     get_current_user_optional,
+    issue_anon_csrf,
     set_session_cookie,
 )
-from app.fastapi.utils import ok, user_public
+from app.fastapi.utils import json_body, ok, user_public
 from app.models.domain import DomainAssignment
 from app.models.user import PasswordResetToken, User
 from app.services.portal import audit, enrolled_domains, now_utc
-from app.services.storage import save_file, validate_upload
+from app.services.roster import (
+    RosterUnavailable,
+    lookup_student,
+    mask_email,
+    normalize_register_number,
+    roster_enabled,
+)
+from app.services.storage import StorageError, save_file, validate_upload
+from app.fastapi.ratelimit import rate_limit
 from config import Config
+from sqlalchemy import func
+
+AVATAR_MAX_BYTES = 5 * 1024 * 1024
 
 logger = logging.getLogger("elite_portal.auth_router")
 
@@ -63,6 +77,10 @@ class RegisterPayload(BaseModel):
     avatar_url: Optional[str] = None
 
 
+class RosterLookupPayload(BaseModel):
+    register_number: Optional[str] = None
+
+
 class ForgotPasswordPayload(BaseModel):
     email: Optional[str] = None
 
@@ -80,16 +98,16 @@ class ChangePasswordPayload(BaseModel):
 @router.get("/csrf")
 def get_csrf(request: Request):
     token = get_csrf_token(request)
-    return ok({"csrf_token": token})
+    res = ok({"csrf_token": token})
+    if not current_session(request):
+        # Signed-out callers (e.g. registration avatar upload) get a cookie-bound token.
+        issue_anon_csrf(res, token)
+    return res
 
 
 @router.get("/me")
 def me(request: Request):
-    try:
-        user = get_current_user_optional(request)
-    except Exception:
-        db.session.rollback()
-        user = get_current_user_optional(request)
+    user = get_current_user_optional(request)
     if not user:
         raise ApiError("Authentication required.", 401, "unauthenticated")
 
@@ -116,7 +134,7 @@ def me(request: Request):
     )
 
 
-@router.post("/login")
+@router.post("/login", dependencies=[Depends(rate_limit("login", 10, 60))])
 def login(payload: LoginPayload, request: Request, response: Response):
     portal = (payload.portal or "").strip().lower()
     email = (payload.email or "").strip().lower()
@@ -165,17 +183,9 @@ def login(payload: LoginPayload, request: Request, response: Response):
             )
 
     csrf_val = secrets.token_urlsafe(32)
-    session_token = create_session_token(user.id, csrf_val)
 
     user.last_login = now_utc()
-    try:
-        db.session.commit()
-    except Exception:
-        db.session.rollback()
-        user = User.query.filter_by(email=email).first()
-        if user:
-            user.last_login = now_utc()
-            db.session.commit()
+    db.session.commit()
 
     redirect_path = {
         "student": "/student",
@@ -184,6 +194,9 @@ def login(payload: LoginPayload, request: Request, response: Response):
         "admin": "/admin",
     }[user.role]
 
+    # Cookie and Bearer token are the same signed value, so both paths agree on expiry
+    # (previously the Bearer token ignored "remember" and expired after 8h).
+    session_token = create_session_token(user.id, csrf_val, remember=remember)
     res = ok(
         {
             "user": user_public(user),
@@ -193,7 +206,7 @@ def login(payload: LoginPayload, request: Request, response: Response):
             "profile_required": user.role == "student" and not user.profile_completed,
         }
     )
-    set_session_cookie(res, user.id, csrf_val, remember=remember)
+    set_session_cookie(res, user.id, csrf_val, remember=remember, token=session_token)
     return res
 
 
@@ -210,9 +223,10 @@ def logout(request: Request):
     return res
 
 
-@router.post("/upload-avatar")
+@router.post("/upload-avatar", dependencies=[Depends(rate_limit("avatar", 20, 3600))])
 def upload_avatar(request: Request, file: UploadFile = File(...)):
-    user = get_current_user(request)
+    # Optional auth: the registration screen uploads an avatar before an account exists
+    # (same behaviour as the original endpoint, which did not require a session).
     filename = file.filename or "avatar.png"
 
     # Validate extension
@@ -220,16 +234,66 @@ def upload_avatar(request: Request, file: UploadFile = File(...)):
     if ext not in {"png", "jpg", "jpeg", "webp", "gif"}:
         raise ApiError("Profile picture must be an image (PNG, JPG, WEBP).", 400, "invalid_image_type")
 
-    meta = save_file(file, folder="avatars")
+    try:
+        validate_upload(file, max_bytes=AVATAR_MAX_BYTES, allowed={"png", "jpg", "jpeg", "webp", "gif"})
+        meta = save_file(file, folder="avatars")
+    except ValueError as exc:
+        raise ApiError(str(exc), 400, "invalid_file") from exc
+    except StorageError as exc:
+        raise ApiError(str(exc), 503, "storage_unavailable") from exc
     return ok(meta, 201)
 
 
-@router.post("/register")
+@router.post("/roster-lookup", dependencies=[Depends(rate_limit("roster", 20, 3600))])
+def roster_lookup(payload: RosterLookupPayload):
+    """Confirm a register number against the approved roster (masked details only)."""
+    if not roster_enabled():
+        raise ApiError("Roster verification is not enabled.", 404, "roster_disabled")
+    register_number = normalize_register_number(payload.register_number)
+    if not register_number:
+        raise ApiError("Please enter your register number.", 400, "missing_register_number")
+    record = _roster_record_or_error(register_number)
+    return ok(
+        {
+            "register_number": record["register_number"],
+            "name": record["name"],
+            "department": record["department"],
+            "email_hint": mask_email(record["email"]),
+        }
+    )
+
+
+def _roster_record_or_error(register_number: str) -> dict:
+    try:
+        record = lookup_student(register_number)
+    except RosterUnavailable:
+        raise ApiError(
+            "Student verification is temporarily unavailable. Please try again in a few minutes.",
+            503,
+            "roster_unavailable",
+        )
+    if record is None:
+        raise ApiError(
+            "This register number is not on the approved Elite roster. Contact your coordinator.",
+            403,
+            "not_eligible",
+        )
+    return record
+
+
+def _register_number_taken(register_number: str, exclude_user_id: Optional[int] = None) -> bool:
+    query = User.query.filter(func.upper(func.replace(User.register_number, " ", "")) == register_number)
+    if exclude_user_id is not None:
+        query = query.filter(User.id != exclude_user_id)
+    return db.session.query(query.exists()).scalar()
+
+
+@router.post("/register", dependencies=[Depends(rate_limit("register", 5, 3600))])
 def register(payload: RegisterPayload):
     name = (payload.name or "").strip()
     email = (payload.email or "").strip().lower()
     password = payload.password or ""
-    register_number = (payload.register_number or "").strip()
+    register_number = normalize_register_number(payload.register_number)
     phone_number = (payload.phone_number or "").strip()
     linkedin_url = (payload.linkedin_url or "").strip()
     github_url = (payload.github_url or "").strip()
@@ -244,6 +308,20 @@ def register(payload: RegisterPayload):
         raise ApiError("Password must be at least 8 characters.", 400, "weak_password")
     if User.query.filter_by(email=email).first():
         raise ApiError("This email is already registered.", 409, "email_exists")
+    if register_number and _register_number_taken(register_number):
+        raise ApiError("This register number is already registered.", 409, "register_number_exists")
+
+    department = None
+    if roster_enabled():
+        if not register_number:
+            raise ApiError("Please enter your register number.", 400, "missing_register_number")
+        record = _roster_record_or_error(register_number)
+        if record["email"] and record["email"] != email:
+            raise ApiError(
+                "Use the college email address registered for this register number.", 400, "email_mismatch"
+            )
+        name = record["name"] or name
+        department = record["department"]
 
     user = User(
         name=name,
@@ -251,6 +329,7 @@ def register(payload: RegisterPayload):
         role="student",
         approval_status="pending",
         register_number=register_number or None,
+        department=department,
         phone_number=phone_number or None,
         linkedin_url=linkedin_url or None,
         github_url=github_url or None,
@@ -263,7 +342,7 @@ def register(payload: RegisterPayload):
     return ok({"message": "Account created. An administrator must approve it before you can sign in."}, 201)
 
 
-@router.post("/forgot-password")
+@router.post("/forgot-password", dependencies=[Depends(rate_limit("forgot", 5, 3600))])
 def forgot_password(payload: ForgotPasswordPayload, request: Request):
     email = (payload.email or "").strip().lower()
     if not email:
@@ -287,10 +366,9 @@ def forgot_password(payload: ForgotPasswordPayload, request: Request):
     reset_path = f"/reset-password?token={token.token}"
     if has_mail:
         try:
-            from app.routes.auth import _send_reset_email
-            base_url = str(request.base_url).rstrip("/")
-            reset_url = base_url + reset_path
-            _send_reset_email(user, reset_url)
+            from app.services.mailer import send_reset_email
+            base_url = (os.getenv("FRONTEND_URL") or str(request.base_url)).rstrip("/")
+            send_reset_email(user, base_url + reset_path)
         except Exception:
             logger.exception("Password reset email failed")
             response["message"] = (
@@ -311,7 +389,7 @@ def forgot_password(payload: ForgotPasswordPayload, request: Request):
     return ok(response)
 
 
-@router.post("/reset-password")
+@router.post("/reset-password", dependencies=[Depends(rate_limit("reset", 10, 3600))])
 def reset_password(payload: ResetPasswordPayload):
     token_value = (payload.token or "").strip()
     password = payload.password or ""
@@ -347,13 +425,8 @@ def change_password(payload: ChangePasswordPayload, user: User = Depends(get_cur
 
 
 @router.patch("/profile")
-def update_profile(request: Request, user: User = Depends(get_current_user)):
-    import json
-    try:
-        data = json.loads(request._body) if hasattr(request, "_body") and request._body else {}
-    except Exception:
-        data = {}
-
+def update_profile(data: dict = Depends(json_body), user: User = Depends(get_current_user)):
+    original_register_number = normalize_register_number(user.register_number)
     editable = [
         "name",
         "register_number",
@@ -371,6 +444,13 @@ def update_profile(request: Request, user: User = Depends(get_current_user)):
         if field in data:
             value = data[field]
             setattr(user, field, value.strip() if isinstance(value, str) and value.strip() else None)
+
+    if "register_number" in data and user.register_number:
+        user.register_number = normalize_register_number(user.register_number)
+        if _register_number_taken(user.register_number, exclude_user_id=user.id):
+            raise ApiError("This register number is already registered.", 409, "register_number_exists")
+        if user.role == "student" and roster_enabled() and user.register_number != original_register_number:
+            _roster_record_or_error(user.register_number)
 
     if "year" in data and data["year"] not in (None, ""):
         try:

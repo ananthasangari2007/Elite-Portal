@@ -57,9 +57,8 @@ class Config:
     SESSION_COOKIE_SECURE = is_production
     REMEMBER_COOKIE_HTTPONLY = True
     REMEMBER_COOKIE_SECURE = is_production
-    PERMANENT_SESSION_LIFETIME = timedelta(
-        seconds=int(os.getenv("SESSION_LIFETIME_SECONDS", str(60 * 60 * 8)))
-    )
+    SESSION_LIFETIME_SECONDS = int(os.getenv("SESSION_LIFETIME_SECONDS", str(60 * 60 * 8)))
+    PERMANENT_SESSION_LIFETIME = timedelta(seconds=SESSION_LIFETIME_SECONDS)
 
     # REST API / SPA
     API_PREFIX = "/api/v1"

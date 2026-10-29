@@ -1,7 +1,9 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { Camera, Github, Globe, GraduationCap, Linkedin, Phone, User } from "lucide-react";
+import { Camera, CheckCircle2, Github, Globe, GraduationCap, Linkedin, Phone, User } from "lucide-react";
 import { api } from "../../lib/api";
+
+type RosterMatch = { register_number: string; name: string; department: string | null; email_hint: string };
 import { Spinner } from "../../components/ui";
 import { useToast } from "../../components/ui/Toast";
 
@@ -26,8 +28,54 @@ export default function RegisterPage() {
   const navigate = useNavigate();
   const { push } = useToast();
 
-  const set = (key: string) => (e: React.ChangeEvent<HTMLInputElement>) =>
+  // Roster verification (only when the server has it enabled).
+  const [rosterEnabled, setRosterEnabled] = useState(false);
+  const [rosterMatch, setRosterMatch] = useState<RosterMatch | null>(null);
+  const [rosterConfirmed, setRosterConfirmed] = useState(false);
+  const [checkingRoster, setCheckingRoster] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    api
+      .get<{ roster_verification?: boolean }>("/public/config")
+      .then((cfg) => active && setRosterEnabled(!!cfg?.roster_verification))
+      .catch(() => {
+        /* config unavailable: server still validates eligibility on submit */
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const set = (key: string) => (e: React.ChangeEvent<HTMLInputElement>) => {
     setForm({ ...form, [key]: e.target.value });
+    if (key === "register_number") {
+      setRosterMatch(null);
+      setRosterConfirmed(false);
+    }
+  };
+
+  async function verifyRegisterNumber() {
+    if (!form.register_number.trim()) return setError("Please enter your register number.");
+    setCheckingRoster(true);
+    setError(null);
+    try {
+      const match = await api.post<RosterMatch>("/auth/roster-lookup", { register_number: form.register_number });
+      setRosterMatch(match);
+      setRosterConfirmed(false);
+    } catch (err: any) {
+      setRosterMatch(null);
+      setError(err.message || "Could not verify the register number.");
+    } finally {
+      setCheckingRoster(false);
+    }
+  }
+
+  function confirmRoster() {
+    if (!rosterMatch) return;
+    setForm((prev) => ({ ...prev, name: rosterMatch.name || prev.name, register_number: rosterMatch.register_number }));
+    setRosterConfirmed(true);
+  }
 
   async function handleAvatarSelect(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -59,6 +107,7 @@ export default function RegisterPage() {
     e.preventDefault();
     if (form.password !== form.confirm) return setError("Passwords do not match.");
     if (form.password.length < 8) return setError("Password must be at least 8 characters.");
+    if (rosterEnabled && !rosterConfirmed) return setError("Verify and confirm your register number first.");
     setBusy(true);
     setError(null);
     try {
@@ -142,13 +191,55 @@ export default function RegisterPage() {
             <div className="grid sm:grid-cols-2 gap-3">
               <div>
                 <label className="label">Full Name *</label>
-                <input className="input" value={form.name} onChange={set("name")} required placeholder="John Doe" />
+                <input className="input" value={form.name} onChange={set("name")} required placeholder="John Doe" readOnly={rosterConfirmed} />
               </div>
               <div>
-                <label className="label">Register Number *</label>
-                <input className="input" value={form.register_number} onChange={set("register_number")} required placeholder="e.g. 10122029" />
+                <label className="label" htmlFor="register-number">Register Number *</label>
+                <input id="register-number" className="input" value={form.register_number} onChange={set("register_number")} required placeholder="e.g. 10122029" />
+                {rosterEnabled && !rosterMatch && (
+                  <button
+                    type="button"
+                    onClick={verifyRegisterNumber}
+                    disabled={checkingRoster}
+                    className="mt-1.5 text-xs font-semibold text-brand-600 hover:text-brand-700"
+                  >
+                    {checkingRoster ? "Checking..." : "Verify register number"}
+                  </button>
+                )}
               </div>
             </div>
+
+            {rosterEnabled && rosterMatch && (
+              <div role="status" className="rounded-xl border border-brand-100 bg-brand-50 px-3.5 py-3 text-sm text-slate-700">
+                <p className="font-semibold text-slate-900">Is this you?</p>
+                <p className="mt-1">
+                  {rosterMatch.name} · {rosterMatch.register_number}
+                  {rosterMatch.department ? ` · ${rosterMatch.department}` : ""}
+                </p>
+                {rosterMatch.email_hint && <p className="text-xs text-slate-500">Registered email: {rosterMatch.email_hint}</p>}
+                {rosterConfirmed ? (
+                  <p className="mt-2 flex items-center gap-1.5 text-xs font-semibold text-emerald-700">
+                    <CheckCircle2 className="h-4 w-4" aria-hidden="true" /> Details confirmed
+                  </p>
+                ) : (
+                  <div className="mt-2 flex gap-2">
+                    <button type="button" className="btn-primary !px-3 !py-1.5 text-xs" onClick={confirmRoster}>
+                      Yes, that's me
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-secondary !px-3 !py-1.5 text-xs"
+                      onClick={() => {
+                        setRosterMatch(null);
+                        setForm((prev) => ({ ...prev, register_number: "" }));
+                      }}
+                    >
+                      Not me
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
 
             <div className="grid sm:grid-cols-2 gap-3">
               <div>
@@ -202,7 +293,10 @@ export default function RegisterPage() {
               </div>
             </div>
 
-            <button className="btn-primary w-full shadow-md py-2.5 mt-2 font-semibold" disabled={busy || uploadingAvatar}>
+            <button
+              className="btn-primary w-full shadow-md py-2.5 mt-2 font-semibold"
+              disabled={busy || uploadingAvatar || (rosterEnabled && !rosterConfirmed)}
+            >
               {busy ? <Spinner className="text-white" /> : "Complete Registration"}
             </button>
           </form>

@@ -21,6 +21,7 @@ from app.fastapi.utils import (
     domain_public,
     get_int,
     iso,
+    json_body,
     material_public,
     ok,
     paginate,
@@ -272,13 +273,8 @@ def create_day(domain_id: int, payload: CreateDayPayload, user: User = Depends(r
 
 
 @router.patch("/days/{day_id}")
-def update_day(day_id: int, request: Request, user: User = Depends(require_roles("coordinator", "admin"))):
+def update_day(day_id: int, data: dict = Depends(json_body), user: User = Depends(require_roles("coordinator", "admin"))):
     day = _day_or_404(user, day_id)
-    import json
-    try:
-        data = json.loads(request._body) if hasattr(request, "_body") and request._body else {}
-    except Exception:
-        data = {}
 
     for field in ("title", "description", "learning_objectives"):
         if field in data:
@@ -315,13 +311,8 @@ def publish_day(day_id: int, user: User = Depends(require_roles("coordinator", "
 
 
 @router.post("/days/{day_id}/lock")
-def lock_day(day_id: int, request: Request, user: User = Depends(require_roles("coordinator", "admin"))):
+def lock_day(day_id: int, data: dict = Depends(json_body), user: User = Depends(require_roles("coordinator", "admin"))):
     day = _day_or_404(user, day_id)
-    import json
-    try:
-        data = json.loads(request._body) if hasattr(request, "_body") and request._body else {}
-    except Exception:
-        data = {}
     day.is_locked = bool(data.get("locked", True))
     if day.is_locked and day.status == "published":
         day.status = "locked"
@@ -357,6 +348,14 @@ def archive_day(day_id: int, user: User = Depends(require_roles("coordinator", "
     audit(user.id, "content.day_archive", target_type="LearningDay", target_id=day.id)
     db.session.commit()
     return ok({"message": "Learning day archived."})
+
+
+@router.get("/days/{day_id}/materials")
+def list_materials(day_id: int, user: User = Depends(require_roles("coordinator", "admin"))):
+    """Day detail with its materials (ContentBuilder reads ``res.materials``)."""
+    day = _day_or_404(user, day_id)
+    materials = day.materials.order_by(LearningMaterial.display_order.asc(), LearningMaterial.id.asc()).all()
+    return ok(day_public(day, include_materials=True, materials=materials))
 
 
 @router.post("/days/{day_id}/materials")
@@ -395,17 +394,11 @@ def add_material(day_id: int, payload: AddMaterialPayload, user: User = Depends(
 
 
 @router.patch("/materials/{material_id}")
-def update_material(material_id: int, request: Request, user: User = Depends(require_roles("coordinator", "admin"))):
+def update_material(material_id: int, data: dict = Depends(json_body), user: User = Depends(require_roles("coordinator", "admin"))):
     material = db.session.get(LearningMaterial, material_id)
     if material is None:
         raise ApiError("Material not found.", 404, "not_found")
     _domain_or_404(user, material.learning_day.domain_id)
-
-    import json
-    try:
-        data = json.loads(request._body) if hasattr(request, "_body") and request._body else {}
-    except Exception:
-        data = {}
 
     for field in ("title", "description", "url", "file_key", "file_name", "status", "tags"):
         if field in data:
@@ -493,13 +486,8 @@ def get_assessment(assessment_id: int, user: User = Depends(require_roles("coord
 
 
 @router.patch("/assessments/{assessment_id}")
-def update_assessment(assessment_id: int, request: Request, user: User = Depends(require_roles("coordinator", "admin"))):
+def update_assessment(assessment_id: int, data: dict = Depends(json_body), user: User = Depends(require_roles("coordinator", "admin"))):
     assessment = _assessment_or_404(user, assessment_id)
-    import json
-    try:
-        data = json.loads(request._body) if hasattr(request, "_body") and request._body else {}
-    except Exception:
-        data = {}
 
     for field in ("title", "description", "instructions"):
         if field in data:
@@ -823,7 +811,8 @@ def students(
     return ok(items, meta=paged["meta"])
 
 
-@router.get("/students/{student_id}")
+# ":int" converter so /students/progress is not captured by this route (was returning 422).
+@router.get("/students/{student_id:int}")
 def student_detail(student_id: int, user: User = Depends(require_roles("coordinator", "faculty", "admin"))):
     student = db.session.get(User, student_id)
     if student is None or student.role != "student":

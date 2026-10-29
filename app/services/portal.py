@@ -9,7 +9,6 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from flask import current_app
 from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
 
@@ -37,11 +36,6 @@ UTC = ZoneInfo("UTC")
 
 # ── Time helpers ──────────────────────────────────────────────────────────
 def _get_cfg(key: str, default=None):
-    try:
-        if current_app:
-            return current_app.config.get(key, default)
-    except Exception:
-        pass
     from config import Config
     return getattr(Config, key, default)
 

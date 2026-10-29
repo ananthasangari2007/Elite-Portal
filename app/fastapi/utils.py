@@ -1,10 +1,12 @@
 """Serialization, formatting, pagination, and response helpers for FastAPI."""
 from __future__ import annotations
 
+import json
 import math
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+from fastapi import Request
 from fastapi.responses import JSONResponse
 from sqlalchemy import func
 
@@ -28,6 +30,24 @@ def fail(message: str, status: int = 400, code: str = "bad_request", details: An
     if details is not None:
         body["error"]["details"] = details
     return JSONResponse(status_code=status, content=body)
+
+
+async def json_body(request: Request) -> dict:
+    """Dependency returning the JSON object body (empty dict when no body).
+
+    Mirrors the legacy Flask ``json_body`` contract: malformed JSON or a
+    non-object body yields 400 ``invalid_body`` instead of being silently ignored.
+    """
+    raw = await request.body()
+    if not raw or not raw.strip():
+        return {}
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        raise ApiError("The request body must be valid JSON.", 400, "invalid_body")
+    if not isinstance(data, dict):
+        raise ApiError("The JSON body must be an object.", 400, "invalid_body")
+    return data
 
 
 def get_int(
@@ -72,9 +92,17 @@ def parse_dt(value: Any, name: str = "date") -> Optional[datetime]:
     return dt
 
 
-def paginate(query, page: int = 1, per_page: int = 20, max_per_page: int = 100):
-    page = max(page, 1)
-    per_page = min(max(per_page, 1), max_per_page)
+def paginate(
+    query,
+    page: Optional[int] = 1,
+    per_page: Optional[int] = None,
+    max_per_page: int = 100,
+    default_per_page: int = 20,
+):
+    """Paginate a query. ``default_per_page`` applies when ``per_page`` is not supplied
+    (matches the legacy Flask helper signature used by the routers)."""
+    page = max(int(page or 1), 1)
+    per_page = min(max(int(per_page or default_per_page), 1), max_per_page)
     total = query.order_by(None).count()
     items = query.offset((page - 1) * per_page).limit(per_page).all()
     return {
