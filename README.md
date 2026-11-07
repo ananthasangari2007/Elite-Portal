@@ -1,167 +1,95 @@
-# Elite Dashboard
+# Elite Portal
 
-Production-ready Flask application for college elite batch task management, submissions, approvals, point ledger, leaderboard, support messages, and Excel reports.
+Elite Batch learning, assessment, daily-task and points portal for Francis Xavier Engineering College.
 
 ## Stack
 
-- Flask
-- Flask-Login
-- Flask-SQLAlchemy
-- Flask-Migrate
-- PostgreSQL for production
-- SQLite only as a local fallback or migration source
-- Render deployment support
+- Backend: FastAPI + Uvicorn (ASGI), SQLAlchemy 2, Alembic migrations
+- Database: PostgreSQL (Neon) in production; SQLite only for local development and tests
+- Frontend: React 18 + Vite + TypeScript + Tailwind (`frontend/`)
+- File storage: Cloudflare R2 (S3-compatible); local disk fallback for development only
 
-## Local Setup
+## Local setup
 
-```bash
+```powershell
 python -m venv .venv
-.venv\Scripts\activate
+.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-copy .env.example .env
+copy .env.example .env        # then fill in values
 ```
 
-Edit `.env`:
+Without `DATABASE_URL`, the app uses `instance/elite_portal.sqlite3` (development only).
 
-```env
-SECRET_KEY=replace-with-a-long-random-secret
-DATABASE_URL=postgresql://username:password@host:5432/database_name
+```powershell
+python -m app.cli db-upgrade   # apply migrations
+python -m app.cli seed-all     # admin (admin@elite.edu, password from ADMIN_PASSWORD) + 4 domains
+python main.py                 # API on http://127.0.0.1:5000 (auto-reload)
 ```
 
-If `DATABASE_URL` is absent, the app falls back to `instance/elite_dashboard.sqlite3` for local development only.
+Frontend (separate terminal):
 
-## Database Migrations
-
-Do not use `db.create_all()` in production.
-
-Create or update tables with Flask-Migrate:
-
-```bash
-python -m flask --app run.py db upgrade
+```powershell
+cd frontend
+npm install
+npm run dev                    # http://localhost:5173, proxies /api to :5000
 ```
 
-Create a new migration after model changes:
+If `frontend/dist` exists (`npm run build`), the backend also serves the SPA at `http://127.0.0.1:5000/`.
 
-```bash
-python -m flask --app run.py db migrate -m "describe change"
-python -m flask --app run.py db upgrade
+## Management commands
+
+```powershell
+python -m app.cli db-upgrade [revision]
+python -m app.cli db-downgrade <revision>
+python -m app.cli db-current
+python -m app.cli seed-all | seed-domains
+python -m app.cli create-admin EMAIL [--name N]
+python -m app.cli create-coordinator EMAIL DOMAIN_CODE [--name N]
+python -m app.cli create-faculty EMAIL DOMAIN_CODE [--name N]
+python -m app.cli reset-admin-password EMAIL
 ```
 
-## Manual Seed Commands
+Passwords are prompted for when `--password` is omitted. New migrations:
+`alembic -c migrations/alembic.ini revision --autogenerate -m "describe change"`
+(run from the repo root with `DATABASE_URL` set).
 
-The app does not auto-seed users or tasks on startup.
+## Tests
 
-Create the first admin manually:
-
-```bash
-python -m flask --app run.py seed-admin
+```powershell
+python -m pytest              # always runs against a throwaway SQLite database
+cd frontend; npm run build    # type check + production build
 ```
 
-Seed the task catalog manually:
+## Health checks
 
-```bash
-python -m flask --app run.py seed-task-catalog
-```
+- `GET /health` (and `/api/v1/health`): liveness plus database status
+- `GET /ready` (and `/api/v1/ready`): 200 when the database is reachable, 503 otherwise
 
-Default seeded admin:
+## Deployment (Render)
 
-- Email: `admin@elite.edu`
-- Password: `Admin@123`
+`render.yaml` defines the service:
 
-Change this password after first login in a real deployment.
+- Build: `pip install -r requirements.txt`
+- Pre-deploy: `python -m app.cli db-upgrade`
+- Start: `uvicorn main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips "*"`
+- Health check: `/ready`
 
-## SQLite To PostgreSQL Migration
+Required environment variables: `APP_ENV=production`, `SECRET_KEY`, `DATABASE_URL`
+(with `sslmode=require`), `CORS_ORIGINS` / `FRONTEND_URL`, and the `R2_*` keys for durable uploads.
+Optional: `MAIL_*` (password reset email) and `ROSTER_*` (approved-student roster). See `.env.example`.
 
-Your SQLite database remains untouched at:
+The frontend is built with `VITE_API_URL` pointing at the API (`/api/v1` when served from the same origin).
+If the frontend is on a different site than the API, set `SESSION_COOKIE_SAMESITE=none` (HTTPS required).
 
-```txt
-instance/elite_dashboard.sqlite3
-```
+## Approved-student roster (optional)
 
-Before migration:
+Set `ROSTER_APPS_SCRIPT_URL` and `ROSTER_SHARED_SECRET` to require students to be on the approved roster
+before registering. The Apps Script request/response contract is documented in `app/services/roster.py`.
+When the roster is enabled and unreachable, registration is refused (fails closed).
 
-1. Back up `instance/elite_dashboard.sqlite3`.
-2. Set PostgreSQL `DATABASE_URL` in `.env`.
-3. Run migrations on PostgreSQL:
+## Rollback
 
-```bash
-python -m flask --app run.py db upgrade
-```
-
-Then migrate data:
-
-```bash
-python scripts/migrate_sqlite_to_postgres.py
-```
-
-Verify row counts and relationships:
-
-```bash
-python scripts/verify_postgres_migration.py
-```
-
-The migration script is idempotent. Existing primary keys are skipped, IDs are preserved, and password hashes are copied as-is.
-
-## Render Deployment
-
-This repo includes:
-
-- `Procfile`
-- `runtime.txt`
-- `render.yaml`
-- `requirements.txt`
-
-On Render:
-
-1. Push this project to GitHub.
-2. Create a Render PostgreSQL database.
-3. Create a Render Web Service from the GitHub repo.
-4. Set environment variables:
-   - `SECRET_KEY`
-   - `DATABASE_URL`
-5. Build command:
-
-```bash
-pip install -r requirements.txt && flask --app run.py db upgrade
-```
-
-6. Start command:
-
-```bash
-gunicorn run:app
-```
-
-## GitHub
-
-The `.gitignore` excludes:
-
-- `.env`
-- virtual environments
-- Python cache files
-- SQLite database files
-- uploaded files
-
-Push with:
-
-```bash
-git init
-git add .
-git commit -m "Prepare Elite Dashboard for PostgreSQL deployment"
-git branch -M main
-git remote add origin https://github.com/YOUR_USERNAME/YOUR_REPO_NAME.git
-git push -u origin main
-```
-
-## Restore Backup
-
-To return to local SQLite development, remove or comment `DATABASE_URL` in `.env`, restore your backed up SQLite file to:
-
-```txt
-instance/elite_dashboard.sqlite3
-```
-
-Then run:
-
-```bash
-python -m flask --app run.py run --debug
-```
+1. Redeploy the previous release (or `git checkout checkpoint-pre-audit-2026-10-29` for the pre-migration code).
+2. Only the `c3d5e7f9a1b2` migration (unique register-number index) is new; to revert it:
+   `python -m app.cli db-downgrade 5b8f1d2a4e90`. It drops only that index; no data is touched.
+3. Existing sessions stay valid across the rollback (same signing key and token format).

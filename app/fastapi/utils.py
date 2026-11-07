@@ -1,68 +1,68 @@
-"""Shared helpers for the versioned Elite Portal JSON API."""
+"""Serialization, formatting, pagination, and response helpers for FastAPI."""
 from __future__ import annotations
 
+import json
 import math
-import secrets
 from datetime import datetime, timezone
-from functools import wraps
+from typing import Any, Optional
 
-from flask import jsonify, request, session
-from flask_login import current_user
+from fastapi import Request
+from fastapi.responses import JSONResponse
+from sqlalchemy import func
 
+from app import db
+from app.fastapi.auth import ApiError
+from app.models.assessment import Assessment
+from app.models.domain import LearningMaterial
 from app.services.portal import iso, to_local
 
 
-class ApiError(Exception):
-    def __init__(self, message, status=400, code="bad_request", details=None):
-        super().__init__(message)
-        self.message = message
-        self.status = status
-        self.code = code
-        self.details = details
-
-
-def ok(data=None, status=200, **extra):
+def ok(data: Any = None, status: int = 200, **extra) -> JSONResponse:
+    """Standard success response format: {"data": ...}"""
     payload = {"data": data}
     payload.update(extra)
-    return jsonify(payload), status
+    return JSONResponse(status_code=status, content=payload)
 
 
-def fail(message, status=400, code="bad_request", details=None):
+def fail(message: str, status: int = 400, code: str = "bad_request", details: Any = None) -> JSONResponse:
+    """Standard error response format: {"error": {"code": ..., "message": ...}}"""
     body = {"error": {"code": code, "message": message}}
     if details is not None:
         body["error"]["details"] = details
-    return jsonify(body), status
+    return JSONResponse(status_code=status, content=body)
 
 
-def require_roles(*roles):
-    def decorator(view):
-        @wraps(view)
-        def wrapped(*args, **kwargs):
-            if not current_user.is_authenticated:
-                raise ApiError("Authentication required.", 401, "unauthenticated")
-            if not current_user.is_active_account:
-                raise ApiError("This account has been deactivated.", 403, "account_inactive")
-            if roles and current_user.role not in roles:
-                raise ApiError("You do not have permission to perform this action.", 403, "forbidden")
-            return view(*args, **kwargs)
+async def json_body(request: Request) -> dict:
+    """Dependency returning the JSON object body (empty dict when no body).
 
-        return wrapped
-
-    return decorator
-
-
-def json_body(required=True):
-    data = request.get_json(silent=True)
-    if data is None:
-        if required:
-            raise ApiError("A JSON body is required.", 400, "invalid_body")
+    Mirrors the legacy Flask ``json_body`` contract: malformed JSON or a
+    non-object body yields 400 ``invalid_body`` instead of being silently ignored.
+    """
+    raw = await request.body()
+    if not raw or not raw.strip():
         return {}
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        raise ApiError("The request body must be valid JSON.", 400, "invalid_body")
     if not isinstance(data, dict):
         raise ApiError("The JSON body must be an object.", 400, "invalid_body")
     return data
 
 
-def get_int(value, default=None, minimum=None, maximum=None, name="value"):
+def get_int(
+    value: Any,
+    default: Optional[int] = None,
+    minimum: Optional[int] = None,
+    maximum: Optional[int] = None,
+    name: str = "value",
+    min_val: Optional[int] = None,
+    max_val: Optional[int] = None,
+) -> Optional[int]:
+    if minimum is None and min_val is not None:
+        minimum = min_val
+    if maximum is None and max_val is not None:
+        maximum = max_val
     if value is None or value == "":
         return default
     try:
@@ -76,7 +76,7 @@ def get_int(value, default=None, minimum=None, maximum=None, name="value"):
     return parsed
 
 
-def parse_dt(value, name="date"):
+def parse_dt(value: Any, name: str = "date") -> Optional[datetime]:
     if value in (None, ""):
         return None
     if isinstance(value, datetime):
@@ -92,9 +92,17 @@ def parse_dt(value, name="date"):
     return dt
 
 
-def paginate(query, default_per_page=20, max_per_page=100):
-    page = max(get_int(request.args.get("page"), 1, 1, name="page"), 1)
-    per_page = get_int(request.args.get("per_page"), default_per_page, 1, max_per_page, "per_page")
+def paginate(
+    query,
+    page: Optional[int] = 1,
+    per_page: Optional[int] = None,
+    max_per_page: int = 100,
+    default_per_page: int = 20,
+):
+    """Paginate a query. ``default_per_page`` applies when ``per_page`` is not supplied
+    (matches the legacy Flask helper signature used by the routers)."""
+    page = max(int(page or 1), 1)
+    per_page = min(max(int(per_page or default_per_page), 1), max_per_page)
     total = query.order_by(None).count()
     items = query.offset((page - 1) * per_page).limit(per_page).all()
     return {
@@ -108,29 +116,15 @@ def paginate(query, default_per_page=20, max_per_page=100):
     }
 
 
-def csrf_token():
-    token = session.get("api_csrf")
-    if not token:
-        token = secrets.token_urlsafe(32)
-        session["api_csrf"] = token
-    return token
-
-
-def require_csrf():
-    expected = session.get("api_csrf")
-    supplied = request.headers.get("X-CSRF-Token")
-    if not expected or not supplied or not secrets.compare_digest(expected, supplied):
-        raise ApiError("Invalid or missing CSRF token.", 403, "csrf_failed")
-
-
 # ── Serializers ───────────────────────────────────────────────────────────
-def user_public(user):
+def user_public(user) -> dict:
     return {
         "id": user.id,
         "name": user.name,
         "email": user.email,
         "role": user.role,
         "register_number": user.register_number,
+        "phone_number": user.phone_number,
         "department": user.department,
         "year": user.year,
         "section": user.section,
@@ -148,7 +142,7 @@ def user_public(user):
     }
 
 
-def domain_public(domain, include_counts=True):
+def domain_public(domain, include_counts: bool = True) -> dict:
     data = {
         "id": domain.id,
         "code": domain.code,
@@ -162,13 +156,16 @@ def domain_public(domain, include_counts=True):
         "domain_change_allowed_until": iso(domain.domain_change_allowed_until),
     }
     if include_counts:
-        data["student_count"] = domain.student_count
-        data["published_days"] = domain.published_days_count
-        data["assessment_count"] = domain.assessments.count()
+        data["student_count"] = getattr(domain, "student_count", 0)
+        data["published_days"] = getattr(domain, "published_days_count", 0)
+        try:
+            data["assessment_count"] = domain.assessments.count()
+        except Exception:
+            data["assessment_count"] = 0
     return data
 
 
-def material_public(material, include_url=True):
+def material_public(material, include_url: bool = True) -> dict:
     return {
         "id": material.id,
         "learning_day_id": material.learning_day_id,
@@ -188,7 +185,32 @@ def material_public(material, include_url=True):
     }
 
 
-def day_public(day, include_materials=False, materials=None):
+def batch_day_counts(day_ids: list[int]) -> tuple[dict[int, int], dict[int, int]]:
+    """Batch count materials and assessments for a list of day IDs in 2 queries (prevents N+1)."""
+    if not day_ids:
+        return {}, {}
+    mat_counts = dict(
+        db.session.query(LearningMaterial.learning_day_id, func.count(LearningMaterial.id))
+        .filter(LearningMaterial.learning_day_id.in_(day_ids))
+        .group_by(LearningMaterial.learning_day_id)
+        .all()
+    )
+    asm_counts = dict(
+        db.session.query(Assessment.learning_day_id, func.count(Assessment.id))
+        .filter(Assessment.learning_day_id.in_(day_ids))
+        .group_by(Assessment.learning_day_id)
+        .all()
+    )
+    return mat_counts, asm_counts
+
+
+def day_public(
+    day,
+    include_materials: bool = False,
+    materials=None,
+    precomputed_mat_count: Optional[int] = None,
+    precomputed_asm_count: Optional[int] = None,
+) -> dict:
     data = {
         "id": day.id,
         "domain_id": day.domain_id,
@@ -202,8 +224,16 @@ def day_public(day, include_materials=False, materials=None):
         "published_at": iso(day.published_at),
         "created_at": iso(day.created_at),
         "updated_at": iso(day.updated_at),
-        "material_count": day.materials.count(),
-        "assessment_count": day.assessments.count(),
+        "material_count": (
+            precomputed_mat_count
+            if precomputed_mat_count is not None
+            else (day.materials.count() if hasattr(day.materials, "count") else len(day.materials))
+        ),
+        "assessment_count": (
+            precomputed_asm_count
+            if precomputed_asm_count is not None
+            else (day.assessments.count() if hasattr(day.assessments, "count") else len(day.assessments))
+        ),
     }
     if include_materials:
         data["materials"] = [
@@ -212,7 +242,7 @@ def day_public(day, include_materials=False, materials=None):
     return data
 
 
-def question_public(question, include_answers=False):
+def question_public(question, include_answers: bool = False) -> dict:
     data = {
         "id": question.id,
         "assessment_id": question.assessment_id,
@@ -258,7 +288,7 @@ def question_public(question, include_answers=False):
     return data
 
 
-def assessment_public(assessment, include_questions=False, include_answers=False):
+def assessment_public(assessment, include_questions: bool = False, include_answers: bool = False) -> dict:
     data = {
         "id": assessment.id,
         "domain_id": assessment.domain_id,
@@ -268,6 +298,9 @@ def assessment_public(assessment, include_questions=False, include_answers=False
         "title": assessment.title,
         "description": assessment.description,
         "assessment_type": assessment.assessment_type,
+        "grading_mode": getattr(assessment, "grading_mode", "automatic") or "automatic",
+        "attendance_points": getattr(assessment, "attendance_points", 5) or 0,
+        "allowed_languages": getattr(assessment, "allowed_languages", None) or [],
         "total_marks": assessment.total_marks,
         "time_limit_minutes": assessment.time_limit_minutes,
         "max_attempts": assessment.max_attempts,
@@ -279,6 +312,7 @@ def assessment_public(assessment, include_questions=False, include_answers=False
         "scheduled_start": iso(assessment.scheduled_start),
         "scheduled_end": iso(assessment.scheduled_end),
         "instructions": assessment.instructions,
+        "available": assessment.is_available,
         "question_count": len(assessment.questions),
         "published_at": iso(assessment.published_at),
         "created_at": iso(assessment.created_at),
@@ -288,12 +322,13 @@ def assessment_public(assessment, include_questions=False, include_answers=False
     return data
 
 
-def attempt_public(attempt, include_detail=False):
+def attempt_public(attempt, include_detail: bool = False) -> dict:
     data = {
         "id": attempt.id,
         "assessment_id": attempt.assessment_id,
-        "assessment": attempt.assessment.title,
-        "assessment_type": attempt.assessment.assessment_type,
+        "assessment": attempt.assessment.title if attempt.assessment else None,
+        "assessment_type": attempt.assessment.assessment_type if attempt.assessment else None,
+        "allowed_languages": getattr(attempt.assessment, "allowed_languages", None) or [],
         "student_id": attempt.student_id,
         "student": attempt.student.name if attempt.student else None,
         "register_number": attempt.student.register_number if attempt.student else None,
@@ -338,7 +373,26 @@ def attempt_public(attempt, include_detail=False):
     return data
 
 
-def evidence_public(evidence):
+def authorization_public(auth) -> dict:
+    return {
+        "id": auth.id,
+        "assessment_id": auth.assessment_id,
+        "assessment_title": auth.assessment.title if auth.assessment else None,
+        "student_id": auth.student_id,
+        "student_name": auth.student.name if auth.student else "All Students",
+        "student_register_number": auth.student.register_number if auth.student else None,
+        "authorized_by": auth.authorized_by,
+        "authorizer_name": auth.authorizer.name if auth.authorizer else None,
+        "authorization_type": auth.authorization_type,
+        "extra_attempts": auth.extra_attempts,
+        "valid_until": iso(auth.valid_until),
+        "reason": auth.reason,
+        "is_active": auth.is_active,
+        "created_at": iso(auth.created_at),
+    }
+
+
+def evidence_public(evidence) -> dict:
     return {
         "id": evidence.id,
         "task_id": evidence.task_id,
@@ -363,7 +417,6 @@ def evidence_public(evidence):
     }
 
 
-def local_date(dt):
-    """Display helper exposed for clients that want the institutional date."""
+def local_date(dt) -> Optional[str]:
     value = to_local(dt)
     return value.isoformat() if value else None

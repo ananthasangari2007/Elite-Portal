@@ -17,12 +17,12 @@
             <h1>Sign in to continue</h1>
         </div>
         <div class="portal-list">
-            {% for key, item in portals.items() %}
-                <a class="portal-card" href="{{ url_for('auth.login', portal=key) }}">
+            {% for item in portals %}
+                <a class="portal-card" href="{{ url_for('auth.login', portal=item.key) }}">
                     <span class="radio-dot"></span>
                     <span>
                         <strong>{{ item.label }}</strong>
-                        <small>{{ item.hint }}</small>
+                        <small>{{ item.description or item.hint }}</small>
                     </span>
                 </a>
             {% endfor %}

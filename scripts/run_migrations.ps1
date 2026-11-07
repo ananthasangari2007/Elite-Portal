@@ -1,32 +1,30 @@
 <#
-PowerShell helper to set Neon DATABASE_URL in this session and run Flask migrations.
+Apply database migrations (and optionally seed the admin + domains) against a given database.
 Usage (PowerShell):
   .\.venv\Scripts\Activate.ps1
-  .\scripts\run_migrations.ps1 -Dsn "postgresql://user:pass@host:5432/db?sslmode=require"
+  .\scripts\run_migrations.ps1 -Dsn "postgresql://user:pass@host:5432/db?sslmode=require" [-Seed]
+Migrations are additive; nothing is dropped. Back up the database before running against production.
 #>
 
 param(
   [Parameter(Mandatory=$true)]
-  [string]$Dsn
+  [string]$Dsn,
+  [switch]$Seed
 )
 
-Write-Host "Setting DATABASE_URL for this session"
 $env:DATABASE_URL = $Dsn
-Write-Host "DATABASE_URL set (masked):" ($Dsn.Substring(0,[Math]::Min($Dsn.Length,60)) + "...")
+Write-Host "DATABASE_URL set for this session (value not printed)."
 
-Write-Host "Running database migrations (flask db upgrade)"
-try {
-    & .\.venv\Scripts\python.exe -m flask --app run.py db upgrade
-    Write-Host "Migrations completed"
-} catch {
-    Write-Host "Migrations failed:" $_.Exception.Message
+Write-Host "Running database migrations (python -m app.cli db-upgrade)"
+& .\.venv\Scripts\python.exe -m app.cli db-upgrade
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "Migrations failed."
     exit 1
 }
+Write-Host "Migrations completed."
 
-Write-Host "Seeding admin user (optional)"
-try {
-    & .\.venv\Scripts\python.exe -m flask --app run.py seed-admin
-    Write-Host "Admin seeded"
-} catch {
-    Write-Host "Seeding failed:" $_.Exception.Message
+if ($Seed) {
+    Write-Host "Seeding admin user and default domains (idempotent; requires ADMIN_PASSWORD)"
+    & .\.venv\Scripts\python.exe -m app.cli seed-all
+    if ($LASTEXITCODE -ne 0) { Write-Host "Seeding failed."; exit 1 }
 }

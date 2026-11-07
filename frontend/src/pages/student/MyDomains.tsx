@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { Check, Lock, Save } from "lucide-react";
 import clsx from "clsx";
 import { useApi } from "../../lib/hooks";
@@ -7,6 +8,7 @@ import { Card, PageHeader, PageLoader, ProgressBar } from "../../components/ui";
 import { useToast } from "../../components/ui/Toast";
 
 export default function MyDomains() {
+  const navigate = useNavigate();
   const { data, loading, reload } = useApi<any>("/student/domains");
   const [selected, setSelected] = useState<number[]>([]);
   const [busy, setBusy] = useState(false);
@@ -48,8 +50,8 @@ export default function MyDomains() {
     setBusy(true);
     try {
       await api.post("/student/domains", { domain_ids: selected });
-      push("Domain selection saved.", "success");
-      reload();
+      push("Domain selection saved. Redirecting to your learning path...", "success");
+      navigate("/student/learning");
     } catch (err: any) {
       push(err.message, "error");
     } finally {

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Scale } from "lucide-react";
+import { AlertTriangle, Info, Scale } from "lucide-react";
 import { useApi } from "../../lib/hooks";
 import { api } from "../../lib/api";
 import { formatDate, humanize } from "../../lib/format";
@@ -35,6 +35,10 @@ export default function MyAppeals() {
     }
   }
 
+  const assignedAlerts = (data || []).filter(
+    (a: any) => a.instruction_message || (a.status === "in_review" && a.assigned_reviewer)
+  );
+
   return (
     <div>
       <PageHeader
@@ -42,6 +46,25 @@ export default function MyAppeals() {
         subtitle="Raise an appeal if you believe a score or points decision is incorrect."
         actions={<button className="btn-primary" onClick={() => setOpen(true)}>New appeal</button>}
       />
+
+      {/* Prominent Faculty Instruction Alert Banner */}
+      {assignedAlerts.map((a: any) => (
+        <div
+          key={`alert-${a.id}`}
+          className="mb-6 rounded-2xl border border-amber-300 bg-amber-50/90 p-4 text-amber-900 flex items-start gap-3.5 shadow-sm"
+        >
+          <AlertTriangle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
+          <div className="space-y-1">
+            <p className="font-bold text-sm text-amber-950">
+              Notice: You are instructed to meet the faculty
+            </p>
+            <p className="text-xs text-amber-900 leading-relaxed">
+              Regarding your appeal for <strong>{a.assessment || "Assessment"}</strong>: Please meet faculty member{" "}
+              <strong>{a.assigned_reviewer}</strong> {a.assigned_reviewer_email && `(${a.assigned_reviewer_email})`} in person for verification and resolution.
+            </p>
+          </div>
+        </div>
+      ))}
 
       <Card pad={false}>
         {loading ? (
@@ -52,7 +75,15 @@ export default function MyAppeals() {
           <div className="table-wrap">
             <table className="table">
               <thead>
-                <tr><th>Assessment</th><th>Reason</th><th>Original</th><th>New</th><th>Status</th><th>Created</th></tr>
+                <tr>
+                  <th>Assessment</th>
+                  <th>Reason</th>
+                  <th>Original</th>
+                  <th>New</th>
+                  <th>Status</th>
+                  <th>Faculty Instruction / Remarks</th>
+                  <th>Created</th>
+                </tr>
               </thead>
               <tbody>
                 {data.map((a: any) => (
@@ -62,6 +93,18 @@ export default function MyAppeals() {
                     <td>{a.original_score ?? "—"}</td>
                     <td>{a.new_score ?? "—"}</td>
                     <td><StatusBadge status={a.status} /></td>
+                    <td className="max-w-sm text-xs">
+                      {a.instruction_message ? (
+                        <span className="inline-flex items-center gap-1.5 font-semibold text-amber-800 bg-amber-100/80 px-2 py-0.5 rounded-md border border-amber-200">
+                          <AlertTriangle className="h-3 w-3 shrink-0 text-amber-600" />
+                          You are instructed to meet the faculty ({a.assigned_reviewer})
+                        </span>
+                      ) : a.review_comments ? (
+                        <span className="text-slate-600">{a.review_comments}</span>
+                      ) : (
+                        <span className="text-slate-400">—</span>
+                      )}
+                    </td>
                     <td className="text-slate-500">{formatDate(a.created_at)}</td>
                   </tr>
                 ))}

@@ -1,31 +1,32 @@
 """Admin API — users, domains, content registry, Elite Tasks, announcements, settings, audit."""
 from __future__ import annotations
 
+import json
 import secrets
 import string
+from typing import Optional
 
-from flask import Blueprint, request
-from flask_login import current_user
+from fastapi import APIRouter, Depends, Query, Request
 
-from app import db
-from app.api.utils import (
+from app.fastapi.auth import require_roles
+from app.fastapi.database import db
+from app.fastapi.utils import (
     ApiError,
     assessment_public,
     day_public,
     domain_public,
     get_int,
     iso,
-    json_body,
     material_public,
     ok,
     paginate,
     parse_dt,
-    require_roles,
     user_public,
 )
 from app.models import (
     Announcement,
     Assessment,
+    AssessmentAuthorization,
     AuditLog,
     Domain,
     DomainAssignment,
@@ -38,7 +39,7 @@ from app.models import (
 )
 from app.services.portal import admin_dashboard, audit, domain_ids_for, notify, now_utc
 
-admin_api = Blueprint("api_admin", __name__, url_prefix="/api/v1")
+router = APIRouter(prefix="/api/v1", tags=["admin"])
 
 DEFAULT_SETTINGS = {
     "institution_timezone": ("Asia/Kolkata", "string", "Institutional display timezone"),
@@ -52,32 +53,69 @@ DEFAULT_SETTINGS = {
 }
 
 
-@admin_api.get("/admin/dashboard")
-@require_roles("admin")
-def dashboard():
+def _temp_password():
+    alphabet = string.ascii_letters + string.digits
+    return "Elite@" + "".join(secrets.choice(alphabet) for _ in range(8))
+
+
+def _assign_domains(user, domain_ids, assignment_type, actor_id=None):
+    if user.role not in {"coordinator", "faculty"}:
+        return
+    wanted = {int(x) for x in domain_ids}
+    existing = DomainAssignment.query.filter_by(user_id=user.id, assignment_type=assignment_type).all()
+    for a in existing:
+        if a.domain_id not in wanted:
+            db.session.delete(a)
+    for domain_id in wanted:
+        if Domain.query.get(domain_id) is None:
+            continue
+        found = DomainAssignment.query.filter_by(
+            user_id=user.id, domain_id=domain_id, assignment_type=assignment_type
+        ).first()
+        if not found:
+            db.session.add(
+                DomainAssignment(
+                    domain_id=domain_id,
+                    user_id=user.id,
+                    assignment_type=assignment_type,
+                    assigned_by=actor_id,
+                )
+            )
+
+
+@router.get("/admin/dashboard")
+def dashboard(current_user: User = Depends(require_roles("admin"))):
     return ok(admin_dashboard())
 
 
 # ── Users ─────────────────────────────────────────────────────────────────
-@admin_api.get("/admin/users")
-@require_roles("admin")
-def users():
+@router.get("/admin/users")
+def users(
+    request: Request,
+    role: Optional[str] = Query(None),
+    department: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    search: Optional[str] = Query(None),
+    page: int = Query(1),
+    per_page: int = Query(25),
+    current_user: User = Depends(require_roles("admin")),
+):
     query = User.query
-    if request.args.get("role"):
-        query = query.filter(User.role == request.args["role"])
-    if request.args.get("department"):
-        query = query.filter(User.department == request.args["department"])
-    if request.args.get("status") == "active":
+    if role:
+        query = query.filter(User.role == role)
+    if department:
+        query = query.filter(User.department == department)
+    if status == "active":
         query = query.filter(User.is_active_account.is_(True))
-    elif request.args.get("status") == "inactive":
+    elif status == "inactive":
         query = query.filter(User.is_active_account.is_(False))
-    if request.args.get("search"):
-        term = f"%{request.args['search'].strip()}%"
+    if search:
+        term = f"%{search.strip()}%"
         query = query.filter(
             (User.name.ilike(term)) | (User.email.ilike(term)) | (User.register_number.ilike(term))
         )
     query = query.order_by(User.role.asc(), User.name.asc())
-    paged = paginate(query, default_per_page=25)
+    paged = paginate(query, page=page, per_page=per_page, default_per_page=25)
 
     items = []
     for u in paged["items"]:
@@ -90,10 +128,12 @@ def users():
     return ok(items, meta=paged["meta"])
 
 
-@admin_api.post("/admin/users")
-@require_roles("admin")
-def create_user():
-    data = json_body()
+@router.post("/admin/users")
+async def create_user(
+    request: Request,
+    current_user: User = Depends(require_roles("admin")),
+):
+    data = await request.json() if (await request.body()) else {}
     name = (data.get("name") or "").strip()
     email = (data.get("email") or "").strip().lower()
     role = (data.get("role") or "student").strip().lower()
@@ -121,49 +161,22 @@ def create_user():
     user.set_password(password)
     db.session.add(user)
     db.session.flush()
-    _assign_domains(user, data.get("domain_ids") or [], assignment_type="coordinator" if role == "coordinator" else "faculty")
+    _assign_domains(user, data.get("domain_ids") or [], assignment_type="coordinator" if role == "coordinator" else "faculty", actor_id=current_user.id)
     audit(current_user.id, "user.create", target_type="User", target_id=user.id, new_value={"role": role, "email": email})
     db.session.commit()
     return ok({"user": user_public(user), "temporary_password": password if not data.get("password") else None}, 201)
 
 
-def _assign_domains(user, domain_ids, assignment_type):
-    if user.role not in {"coordinator", "faculty"}:
-        return
-    wanted = {int(x) for x in domain_ids}
-    existing = DomainAssignment.query.filter_by(user_id=user.id, assignment_type=assignment_type).all()
-    for a in existing:
-        if a.domain_id not in wanted:
-            db.session.delete(a)
-    for domain_id in wanted:
-        if Domain.query.get(domain_id) is None:
-            continue
-        found = DomainAssignment.query.filter_by(
-            user_id=user.id, domain_id=domain_id, assignment_type=assignment_type
-        ).first()
-        if not found:
-            db.session.add(
-                DomainAssignment(
-                    domain_id=domain_id,
-                    user_id=user.id,
-                    assignment_type=assignment_type,
-                    assigned_by=current_user.id,
-                )
-            )
-
-
-def _temp_password():
-    alphabet = string.ascii_letters + string.digits
-    return "Elite@" + "".join(secrets.choice(alphabet) for _ in range(8))
-
-
-@admin_api.patch("/admin/users/<int:user_id>")
-@require_roles("admin")
-def update_user(user_id):
+@router.patch("/admin/users/{user_id}")
+async def update_user(
+    user_id: int,
+    request: Request,
+    current_user: User = Depends(require_roles("admin")),
+):
     user = db.session.get(User, user_id)
     if user is None:
         raise ApiError("User not found.", 404, "not_found")
-    data = json_body()
+    data = await request.json() if (await request.body()) else {}
     before = user_public(user)
     for field in ("name", "department", "section", "register_number", "bio"):
         if field in data:
@@ -182,15 +195,17 @@ def update_user(user_id):
     if "is_active_account" in data:
         user.is_active_account = bool(data["is_active_account"])
     if "domain_ids" in data:
-        _assign_domains(user, data["domain_ids"], assignment_type="coordinator" if user.role == "coordinator" else "faculty")
+        _assign_domains(user, data["domain_ids"], assignment_type="coordinator" if user.role == "coordinator" else "faculty", actor_id=current_user.id)
     audit(current_user.id, "user.update", target_type="User", target_id=user.id, old_value=before, new_value=user_public(user))
     db.session.commit()
     return ok(user_public(user))
 
 
-@admin_api.post("/admin/users/<int:user_id>/toggle-active")
-@require_roles("admin")
-def toggle_active(user_id):
+@router.post("/admin/users/{user_id}/toggle-active")
+def toggle_active(
+    user_id: int,
+    current_user: User = Depends(require_roles("admin")),
+):
     user = db.session.get(User, user_id)
     if user is None:
         raise ApiError("User not found.", 404, "not_found")
@@ -208,9 +223,11 @@ def toggle_active(user_id):
     return ok(user_public(user))
 
 
-@admin_api.post("/admin/users/<int:user_id>/approve")
-@require_roles("admin")
-def approve_user(user_id):
+@router.post("/admin/users/{user_id}/approve")
+def approve_user(
+    user_id: int,
+    current_user: User = Depends(require_roles("admin")),
+):
     user = db.session.get(User, user_id)
     if user is None:
         raise ApiError("User not found.", 404, "not_found")
@@ -221,9 +238,11 @@ def approve_user(user_id):
     return ok(user_public(user))
 
 
-@admin_api.post("/admin/users/<int:user_id>/reset-password")
-@require_roles("admin")
-def reset_user_password(user_id):
+@router.post("/admin/users/{user_id}/reset-password")
+def reset_user_password(
+    user_id: int,
+    current_user: User = Depends(require_roles("admin")),
+):
     user = db.session.get(User, user_id)
     if user is None:
         raise ApiError("User not found.", 404, "not_found")
@@ -235,9 +254,8 @@ def reset_user_password(user_id):
 
 
 # ── Domains ───────────────────────────────────────────────────────────────
-@admin_api.get("/admin/domains")
-@require_roles("admin")
-def domains():
+@router.get("/admin/domains")
+def domains(current_user: User = Depends(require_roles("admin"))):
     rows = Domain.query.order_by(Domain.is_compulsory.desc(), Domain.name).all()
     result = []
     for d in rows:
@@ -253,10 +271,12 @@ def domains():
     return ok(result)
 
 
-@admin_api.post("/admin/domains")
-@require_roles("admin")
-def create_domain():
-    data = json_body()
+@router.post("/admin/domains")
+async def create_domain(
+    request: Request,
+    current_user: User = Depends(require_roles("admin")),
+):
+    data = await request.json() if (await request.body()) else {}
     code = (data.get("code") or "").strip().upper()
     name = (data.get("name") or "").strip()
     if len(code) < 2 or len(name) < 3:
@@ -282,13 +302,16 @@ def create_domain():
     return ok(domain_public(domain), 201)
 
 
-@admin_api.patch("/admin/domains/<int:domain_id>")
-@require_roles("admin")
-def update_domain(domain_id):
+@router.patch("/admin/domains/{domain_id}")
+async def update_domain(
+    domain_id: int,
+    request: Request,
+    current_user: User = Depends(require_roles("admin")),
+):
     domain = db.session.get(Domain, domain_id)
     if domain is None:
         raise ApiError("Domain not found.", 404, "not_found")
-    data = json_body()
+    data = await request.json() if (await request.body()) else {}
     before = domain_public(domain)
     for field in ("name", "description", "icon", "color"):
         if field in data:
@@ -306,9 +329,11 @@ def update_domain(domain_id):
     return ok(domain_public(domain))
 
 
-@admin_api.post("/admin/domains/<int:domain_id>/toggle-active")
-@require_roles("admin")
-def toggle_domain(domain_id):
+@router.post("/admin/domains/{domain_id}/toggle-active")
+def toggle_domain(
+    domain_id: int,
+    current_user: User = Depends(require_roles("admin")),
+):
     domain = db.session.get(Domain, domain_id)
     if domain is None:
         raise ApiError("Domain not found.", 404, "not_found")
@@ -319,21 +344,27 @@ def toggle_domain(domain_id):
 
 
 # ── Content registry ──────────────────────────────────────────────────────
-@admin_api.get("/admin/content")
-@require_roles("admin")
-def content_registry():
+@router.get("/admin/content")
+def content_registry(
+    type: Optional[str] = Query(None),
+    domain_id: Optional[int] = Query(None),
+    search: Optional[str] = Query(None),
+    page: int = Query(1),
+    per_page: int = Query(30),
+    current_user: User = Depends(require_roles("admin")),
+):
     query = (
         LearningMaterial.query.join(LearningDay, LearningDay.id == LearningMaterial.learning_day_id)
         .order_by(LearningDay.domain_id.asc(), LearningDay.day_number.asc(), LearningMaterial.display_order.asc())
     )
-    if request.args.get("type") and request.args["type"] != "all":
-        query = query.filter(LearningMaterial.material_type == request.args["type"])
-    if request.args.get("domain_id"):
-        query = query.filter(LearningDay.domain_id == get_int(request.args["domain_id"]))
-    if request.args.get("search"):
-        term = f"%{request.args['search'].strip()}%"
+    if type and type != "all":
+        query = query.filter(LearningMaterial.material_type == type)
+    if domain_id:
+        query = query.filter(LearningDay.domain_id == domain_id)
+    if search:
+        term = f"%{search.strip()}%"
         query = query.filter(LearningMaterial.title.ilike(term))
-    paged = paginate(query, default_per_page=30)
+    paged = paginate(query, page=page, per_page=per_page, default_per_page=30)
     items = []
     for m in paged["items"]:
         data = material_public(m)
@@ -350,28 +381,37 @@ def content_registry():
 
 
 # ── Assessment registry ───────────────────────────────────────────────────
-@admin_api.get("/admin/assessments")
-@require_roles("admin")
-def assessment_registry():
+@router.get("/admin/assessments")
+def assessment_registry(
+    domain_id: Optional[int] = Query(None),
+    status: Optional[str] = Query(None),
+    type: Optional[str] = Query(None),
+    page: int = Query(1),
+    per_page: int = Query(20),
+    current_user: User = Depends(require_roles("admin")),
+):
     query = Assessment.query
-    if request.args.get("domain_id"):
-        query = query.filter(Assessment.domain_id == get_int(request.args["domain_id"]))
-    if request.args.get("status"):
-        query = query.filter(Assessment.status == request.args["status"])
-    if request.args.get("type"):
-        query = query.filter(Assessment.assessment_type == request.args["type"])
+    if domain_id:
+        query = query.filter(Assessment.domain_id == domain_id)
+    if status:
+        query = query.filter(Assessment.status == status)
+    if type:
+        query = query.filter(Assessment.assessment_type == type)
     query = query.order_by(Assessment.created_at.desc())
-    paged = paginate(query)
+    paged = paginate(query, page=page, per_page=per_page)
     return ok([assessment_public(a) for a in paged["items"]], meta=paged["meta"])
 
 
-@admin_api.post("/admin/assessments/<int:assessment_id>/reopen")
-@require_roles("admin")
-def reopen_assessment(assessment_id):
+@router.post("/admin/assessments/{assessment_id}/reopen")
+async def reopen_assessment(
+    assessment_id: int,
+    request: Request,
+    current_user: User = Depends(require_roles("admin")),
+):
     assessment = db.session.get(Assessment, assessment_id)
     if assessment is None:
         raise ApiError("Assessment not found.", 404, "not_found")
-    data = json_body(required=False)
+    data = await request.json() if (await request.body()) else {}
     assessment.status = "published"
     if data.get("scheduled_end"):
         assessment.scheduled_end = parse_dt(data.get("scheduled_end"), "scheduled_end")
@@ -384,6 +424,38 @@ def reopen_assessment(assessment_id):
     )
     db.session.commit()
     return ok(assessment_public(assessment))
+
+
+@router.post("/admin/assessments/{assessment_id}/auto-release")
+def auto_release_assessment(
+    assessment_id: int,
+    current_user: User = Depends(require_roles("admin")),
+):
+    assessment = db.session.get(Assessment, assessment_id)
+    if assessment is None:
+        raise ApiError("Assessment not found.", 404, "not_found")
+    assessment.status = "published"
+    if not assessment.published_at:
+        assessment.published_at = now_utc()
+    auth = AssessmentAuthorization(
+        assessment_id=assessment.id,
+        student_id=None,
+        authorized_by=current_user.id,
+        authorization_type="admin_release",
+        extra_attempts=0,
+        reason="Admin auto-release override",
+        is_active=True,
+    )
+    db.session.add(auth)
+    audit(
+        current_user.id,
+        "assessment.auto_release",
+        target_type="Assessment",
+        target_id=assessment.id,
+        description=f"Assessment '{assessment.title}' auto-released by admin",
+    )
+    db.session.commit()
+    return ok({"message": "Assessment auto-released.", "assessment": assessment_public(assessment)})
 
 
 # ── Elite Tasks ───────────────────────────────────────────────────────────
@@ -407,20 +479,26 @@ def _task_payload(task):
     }
 
 
-@admin_api.get("/admin/tasks")
-@require_roles("admin")
-def tasks():
+@router.get("/admin/tasks")
+def tasks(
+    status: Optional[str] = Query(None),
+    page: int = Query(1),
+    per_page: int = Query(20),
+    current_user: User = Depends(require_roles("admin")),
+):
     query = EliteTask.query.order_by(EliteTask.created_at.desc())
-    if request.args.get("status"):
-        query = query.filter(EliteTask.status == request.args["status"])
-    paged = paginate(query)
+    if status:
+        query = query.filter(EliteTask.status == status)
+    paged = paginate(query, page=page, per_page=per_page)
     return ok([_task_payload(t) for t in paged["items"]], meta=paged["meta"])
 
 
-@admin_api.post("/admin/tasks")
-@require_roles("admin")
-def create_task():
-    data = json_body()
+@router.post("/admin/tasks")
+async def create_task(
+    request: Request,
+    current_user: User = Depends(require_roles("admin")),
+):
+    data = await request.json() if (await request.body()) else {}
     title = (data.get("title") or "").strip()
     description = (data.get("description") or "").strip()
     if len(title) < 3:
@@ -447,13 +525,16 @@ def create_task():
     return ok(_task_payload(task), 201)
 
 
-@admin_api.patch("/admin/tasks/<int:task_id>")
-@require_roles("admin")
-def update_task(task_id):
+@router.patch("/admin/tasks/{task_id}")
+async def update_task(
+    task_id: int,
+    request: Request,
+    current_user: User = Depends(require_roles("admin")),
+):
     task = db.session.get(EliteTask, task_id)
     if task is None:
         raise ApiError("Task not found.", 404, "not_found")
-    data = json_body()
+    data = await request.json() if (await request.body()) else {}
     for field in ("title", "description", "instructions", "category", "allowed_evidence_formats"):
         if field in data:
             setattr(task, field, data[field])
@@ -491,20 +572,48 @@ def _announcement_payload(a):
     }
 
 
-@admin_api.get("/admin/announcements")
-@require_roles("admin")
-def announcements():
+def _fan_out_announcement(row):
+    audience_roles = {
+        "all": ["student", "coordinator", "faculty", "admin"],
+        "students": ["student"],
+        "coordinators": ["coordinator"],
+        "faculty": ["faculty"],
+        "admin": ["admin"],
+    }.get(row.target_audience, ["student"])
+
+    query = User.query.filter(User.role.in_(audience_roles), User.is_active_account.is_(True))
+    if row.target_domain_id:
+        domain = db.session.get(Domain, row.target_domain_id)
+        if domain and "student" in audience_roles:
+            student_ids = [
+                e.student_id
+                for e in StudentDomainEnrollment.query.filter_by(domain_id=domain.id, is_active=True).all()
+            ]
+            query = query.filter(User.id.in_(student_ids or [-1]))
+    for user in query.limit(500).all():
+        notify(user.id, row.title, row.content[:280], "info", link_url="/announcements")
+
+
+@router.get("/admin/announcements")
+def announcements(
+    status: Optional[str] = Query(None),
+    page: int = Query(1),
+    per_page: int = Query(20),
+    current_user: User = Depends(require_roles("admin")),
+):
     query = Announcement.query.order_by(Announcement.created_at.desc())
-    if request.args.get("status"):
-        query = query.filter(Announcement.status == request.args["status"])
-    paged = paginate(query)
+    if status:
+        query = query.filter(Announcement.status == status)
+    paged = paginate(query, page=page, per_page=per_page)
     return ok([_announcement_payload(a) for a in paged["items"]], meta=paged["meta"])
 
 
-@admin_api.post("/admin/announcements")
-@require_roles("admin")
-def create_announcement():
-    data = json_body()
+@router.post("/admin/announcements")
+async def create_announcement(
+    request: Request,
+    current_user: User = Depends(require_roles("admin")),
+):
+    data = await request.json() if (await request.body()) else {}
     title = (data.get("title") or "").strip()
     content = (data.get("content") or "").strip()
     if len(title) < 3 or len(content) < 5:
@@ -530,14 +639,17 @@ def create_announcement():
     return ok(_announcement_payload(row), 201)
 
 
-@admin_api.patch("/admin/announcements/<int:announcement_id>")
-@require_roles("admin")
-def update_announcement(announcement_id):
+@router.patch("/admin/announcements/{announcement_id}")
+async def update_announcement(
+    announcement_id: int,
+    request: Request,
+    current_user: User = Depends(require_roles("admin")),
+):
     row = db.session.get(Announcement, announcement_id)
     if row is None:
         raise ApiError("Announcement not found.", 404, "not_found")
     was_published = row.status == "published"
-    data = json_body()
+    data = await request.json() if (await request.body()) else {}
     for field in ("title", "content", "category", "target_audience", "status"):
         if field in data:
             setattr(row, field, data[field])
@@ -554,28 +666,6 @@ def update_announcement(announcement_id):
     return ok(_announcement_payload(row))
 
 
-def _fan_out_announcement(row):
-    audience_roles = {
-        "all": ["student", "coordinator", "faculty", "admin"],
-        "students": ["student"],
-        "coordinators": ["coordinator"],
-        "faculty": ["faculty"],
-        "admin": ["admin"],
-    }.get(row.target_audience, ["student"])
-
-    query = User.query.filter(User.role.in_(audience_roles), User.is_active_account.is_(True))
-    if row.target_domain_id:
-        domain = db.session.get(Domain, row.target_domain_id)
-        if domain and "student" in audience_roles:
-            student_ids = [
-                e.student_id
-                for e in StudentDomainEnrollment.query.filter_by(domain_id=domain.id, is_active=True).all()
-            ]
-            query = query.filter(User.id.in_(student_ids or [-1]))
-    for user in query.limit(500).all():
-        notify(user.id, row.title, row.content[:280], "info", link_url="/announcements")
-
-
 # ── Settings ──────────────────────────────────────────────────────────────
 def _setting_value(row):
     if row.value_type == "integer":
@@ -586,8 +676,6 @@ def _setting_value(row):
     if row.value_type == "boolean":
         return str(row.value).lower() in {"true", "1", "yes"}
     if row.value_type == "json":
-        import json
-
         try:
             return json.loads(row.value)
         except (TypeError, ValueError):
@@ -595,9 +683,19 @@ def _setting_value(row):
     return row.value
 
 
-@admin_api.get("/admin/settings")
-@require_roles("admin")
-def get_settings():
+def _coerce(value, value_type):
+    if value_type == "integer":
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return value
+    if value_type == "boolean":
+        return str(value).lower() in {"true", "1", "yes"}
+    return value
+
+
+@router.get("/admin/settings")
+def get_settings(current_user: User = Depends(require_roles("admin"))):
     existing = {s.key: s for s in SystemSetting.query.all()}
     result = []
     for key, (value, value_type, description) in DEFAULT_SETTINGS.items():
@@ -612,21 +710,12 @@ def get_settings():
     return ok(result)
 
 
-def _coerce(value, value_type):
-    if value_type == "integer":
-        try:
-            return int(value)
-        except (TypeError, ValueError):
-            return value
-    if value_type == "boolean":
-        return str(value).lower() in {"true", "1", "yes"}
-    return value
-
-
-@admin_api.put("/admin/settings")
-@require_roles("admin")
-def update_settings():
-    data = json_body()
+@router.put("/admin/settings")
+async def update_settings(
+    request: Request,
+    current_user: User = Depends(require_roles("admin")),
+):
+    data = await request.json() if (await request.body()) else {}
     updates = data.get("settings") if isinstance(data.get("settings"), dict) else data
     if not isinstance(updates, dict):
         raise ApiError("Provide a settings object.", 400, "invalid_payload")
@@ -646,15 +735,20 @@ def update_settings():
 
 
 # ── Audit logs ────────────────────────────────────────────────────────────
-@admin_api.get("/admin/audit-logs")
-@require_roles("admin")
-def audit_logs():
+@router.get("/admin/audit-logs")
+def audit_logs(
+    action: Optional[str] = Query(None),
+    actor_id: Optional[int] = Query(None),
+    page: int = Query(1),
+    per_page: int = Query(40),
+    current_user: User = Depends(require_roles("admin")),
+):
     query = AuditLog.query.order_by(AuditLog.created_at.desc())
-    if request.args.get("action"):
-        query = query.filter(AuditLog.action.ilike(f"%{request.args['action']}%"))
-    if request.args.get("actor_id"):
-        query = query.filter(AuditLog.actor_id == get_int(request.args["actor_id"]))
-    paged = paginate(query, default_per_page=40)
+    if action:
+        query = query.filter(AuditLog.action.ilike(f"%{action}%"))
+    if actor_id:
+        query = query.filter(AuditLog.actor_id == actor_id)
+    paged = paginate(query, page=page, per_page=per_page, default_per_page=40)
     return ok(
         [
             {

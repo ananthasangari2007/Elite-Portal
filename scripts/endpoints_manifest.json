@@ -1,0 +1,835 @@
+[
+  {
+    "module": "auth",
+    "method": "GET",
+    "path": "/api/v1/auth/csrf",
+    "func": "get_csrf",
+    "args": ""
+  },
+  {
+    "module": "auth",
+    "method": "GET",
+    "path": "/api/v1/auth/me",
+    "func": "me",
+    "args": ""
+  },
+  {
+    "module": "auth",
+    "method": "POST",
+    "path": "/api/v1/auth/login",
+    "func": "login",
+    "args": ""
+  },
+  {
+    "module": "auth",
+    "method": "POST",
+    "path": "/api/v1/auth/logout",
+    "func": "logout",
+    "args": ""
+  },
+  {
+    "module": "auth",
+    "method": "POST",
+    "path": "/api/v1/auth/upload-avatar",
+    "func": "upload_avatar",
+    "args": ""
+  },
+  {
+    "module": "auth",
+    "method": "POST",
+    "path": "/api/v1/auth/register",
+    "func": "register",
+    "args": ""
+  },
+  {
+    "module": "auth",
+    "method": "POST",
+    "path": "/api/v1/auth/forgot-password",
+    "func": "forgot_password",
+    "args": ""
+  },
+  {
+    "module": "auth",
+    "method": "POST",
+    "path": "/api/v1/auth/reset-password",
+    "func": "reset_password",
+    "args": ""
+  },
+  {
+    "module": "auth",
+    "method": "POST",
+    "path": "/api/v1/auth/change-password",
+    "func": "change_password",
+    "args": ""
+  },
+  {
+    "module": "auth",
+    "method": "PATCH",
+    "path": "/api/v1/auth/profile",
+    "func": "update_profile",
+    "args": ""
+  },
+  {
+    "module": "common",
+    "method": "GET",
+    "path": "/api/v1/public/config",
+    "func": "public_config",
+    "args": ""
+  },
+  {
+    "module": "common",
+    "method": "GET",
+    "path": "/api/v1/health",
+    "func": "health",
+    "args": ""
+  },
+  {
+    "module": "common",
+    "method": "POST",
+    "path": "/api/v1/uploads",
+    "func": "upload",
+    "args": ""
+  },
+  {
+    "module": "common",
+    "method": "GET",
+    "path": "/api/v1/files/<path:key>",
+    "func": "download",
+    "args": "key"
+  },
+  {
+    "module": "common",
+    "method": "GET",
+    "path": "/api/v1/requests/<int:request_id>",
+    "func": "request_detail",
+    "args": "request_id"
+  },
+  {
+    "module": "common",
+    "method": "POST",
+    "path": "/api/v1/requests/<int:request_id>/messages",
+    "func": "post_message",
+    "args": "request_id"
+  },
+  {
+    "module": "common",
+    "method": "PATCH",
+    "path": "/api/v1/requests/<int:request_id>/status",
+    "func": "update_request_status",
+    "args": "request_id"
+  },
+  {
+    "module": "common",
+    "method": "POST",
+    "path": "/api/v1/notifications/<int:notification_id>/read",
+    "func": "mark_notification",
+    "args": "notification_id"
+  },
+  {
+    "module": "common",
+    "method": "POST",
+    "path": "/api/v1/notifications/read-all",
+    "func": "mark_all_notifications",
+    "args": ""
+  },
+  {
+    "module": "common",
+    "method": "GET",
+    "path": "/api/v1/config/uploads",
+    "func": "upload_config",
+    "args": ""
+  },
+  {
+    "module": "student",
+    "method": "GET",
+    "path": "/api/v1/student/dashboard",
+    "func": "dashboard",
+    "args": ""
+  },
+  {
+    "module": "student",
+    "method": "GET",
+    "path": "/api/v1/student/points",
+    "func": "my_points",
+    "args": ""
+  },
+  {
+    "module": "student",
+    "method": "GET",
+    "path": "/api/v1/domains",
+    "func": "list_domains",
+    "args": ""
+  },
+  {
+    "module": "student",
+    "method": "GET",
+    "path": "/api/v1/student/domains",
+    "func": "my_domains",
+    "args": ""
+  },
+  {
+    "module": "student",
+    "method": "POST",
+    "path": "/api/v1/student/domains",
+    "func": "select_domains",
+    "args": ""
+  },
+  {
+    "module": "student",
+    "method": "GET",
+    "path": "/api/v1/student/domains/<int:domain_id>/learning-path",
+    "func": "learning_path",
+    "args": "domain_id"
+  },
+  {
+    "module": "student",
+    "method": "GET",
+    "path": "/api/v1/learning-days/<int:day_id>",
+    "func": "learning_day_detail",
+    "args": "day_id"
+  },
+  {
+    "module": "student",
+    "method": "POST",
+    "path": "/api/v1/learning-days/<int:day_id>/complete",
+    "func": "complete_day",
+    "args": "day_id"
+  },
+  {
+    "module": "student",
+    "method": "GET",
+    "path": "/api/v1/student/materials",
+    "func": "materials",
+    "args": ""
+  },
+  {
+    "module": "student",
+    "method": "GET",
+    "path": "/api/v1/student/assessments",
+    "func": "assessments",
+    "args": ""
+  },
+  {
+    "module": "student",
+    "method": "GET",
+    "path": "/api/v1/assessments/<int:assessment_id>/instructions",
+    "func": "assessment_instructions",
+    "args": "assessment_id"
+  },
+  {
+    "module": "student",
+    "method": "POST",
+    "path": "/api/v1/assessments/<int:assessment_id>/start",
+    "func": "start_attempt",
+    "args": "assessment_id"
+  },
+  {
+    "module": "student",
+    "method": "GET",
+    "path": "/api/v1/attempts/<int:attempt_id>",
+    "func": "get_attempt",
+    "args": "attempt_id"
+  },
+  {
+    "module": "student",
+    "method": "PATCH",
+    "path": "/api/v1/attempts/<int:attempt_id>/answers",
+    "func": "save_answer",
+    "args": "attempt_id"
+  },
+  {
+    "module": "student",
+    "method": "POST",
+    "path": "/api/v1/attempts/<int:attempt_id>/submit",
+    "func": "submit_attempt",
+    "args": "attempt_id"
+  },
+  {
+    "module": "student",
+    "method": "POST",
+    "path": "/api/v1/attempts/<int:attempt_id>/run-code",
+    "func": "run_code_test",
+    "args": "attempt_id"
+  },
+  {
+    "module": "student",
+    "method": "POST",
+    "path": "/api/v1/attempts/<int:attempt_id>/code",
+    "func": "submit_code",
+    "args": "attempt_id"
+  },
+  {
+    "module": "student",
+    "method": "POST",
+    "path": "/api/v1/attempts/<int:attempt_id>/integrity",
+    "func": "integrity_event",
+    "args": "attempt_id"
+  },
+  {
+    "module": "student",
+    "method": "GET",
+    "path": "/api/v1/attempts/<int:attempt_id>/result",
+    "func": "attempt_result",
+    "args": "attempt_id"
+  },
+  {
+    "module": "student",
+    "method": "GET",
+    "path": "/api/v1/student/tasks",
+    "func": "elite_tasks",
+    "args": ""
+  },
+  {
+    "module": "student",
+    "method": "GET",
+    "path": "/api/v1/student/tasks/submissions",
+    "func": "my_task_submissions",
+    "args": ""
+  },
+  {
+    "module": "student",
+    "method": "POST",
+    "path": "/api/v1/student/tasks/<int:task_id>/submit",
+    "func": "submit_task",
+    "args": "task_id"
+  },
+  {
+    "module": "student",
+    "method": "GET",
+    "path": "/api/v1/student/requests",
+    "func": "my_requests",
+    "args": ""
+  },
+  {
+    "module": "student",
+    "method": "POST",
+    "path": "/api/v1/student/requests",
+    "func": "create_request",
+    "args": ""
+  },
+  {
+    "module": "student",
+    "method": "GET",
+    "path": "/api/v1/student/appeals",
+    "func": "my_appeals",
+    "args": ""
+  },
+  {
+    "module": "student",
+    "method": "POST",
+    "path": "/api/v1/student/appeals",
+    "func": "create_appeal",
+    "args": ""
+  },
+  {
+    "module": "student",
+    "method": "GET",
+    "path": "/api/v1/announcements",
+    "func": "announcements",
+    "args": ""
+  },
+  {
+    "module": "student",
+    "method": "GET",
+    "path": "/api/v1/notifications",
+    "func": "notifications",
+    "args": ""
+  },
+  {
+    "module": "student",
+    "method": "GET",
+    "path": "/api/v1/leaderboards",
+    "func": "leaderboards",
+    "args": ""
+  },
+  {
+    "module": "coordinator",
+    "method": "GET",
+    "path": "/api/v1/coordinator/dashboard",
+    "func": "dashboard",
+    "args": ""
+  },
+  {
+    "module": "coordinator",
+    "method": "GET",
+    "path": "/api/v1/coordinator/domains",
+    "func": "domains",
+    "args": ""
+  },
+  {
+    "module": "coordinator",
+    "method": "GET",
+    "path": "/api/v1/coordinator/domains/<int:domain_id>/days",
+    "func": "list_days",
+    "args": "domain_id"
+  },
+  {
+    "module": "coordinator",
+    "method": "POST",
+    "path": "/api/v1/coordinator/domains/<int:domain_id>/days",
+    "func": "create_day",
+    "args": "domain_id"
+  },
+  {
+    "module": "coordinator",
+    "method": "PATCH",
+    "path": "/api/v1/coordinator/days/<int:day_id>",
+    "func": "update_day",
+    "args": "day_id"
+  },
+  {
+    "module": "coordinator",
+    "method": "POST",
+    "path": "/api/v1/coordinator/days/<int:day_id>/publish",
+    "func": "publish_day",
+    "args": "day_id"
+  },
+  {
+    "module": "coordinator",
+    "method": "POST",
+    "path": "/api/v1/coordinator/days/<int:day_id>/lock",
+    "func": "lock_day",
+    "args": "day_id"
+  },
+  {
+    "module": "coordinator",
+    "method": "POST",
+    "path": "/api/v1/coordinator/days/reorder",
+    "func": "reorder_days",
+    "args": ""
+  },
+  {
+    "module": "coordinator",
+    "method": "DELETE",
+    "path": "/api/v1/coordinator/days/<int:day_id>",
+    "func": "archive_day",
+    "args": "day_id"
+  },
+  {
+    "module": "coordinator",
+    "method": "POST",
+    "path": "/api/v1/coordinator/days/<int:day_id>/materials",
+    "func": "add_material",
+    "args": "day_id"
+  },
+  {
+    "module": "coordinator",
+    "method": "PATCH",
+    "path": "/api/v1/coordinator/materials/<int:material_id>",
+    "func": "update_material",
+    "args": "material_id"
+  },
+  {
+    "module": "coordinator",
+    "method": "DELETE",
+    "path": "/api/v1/coordinator/materials/<int:material_id>",
+    "func": "delete_material",
+    "args": "material_id"
+  },
+  {
+    "module": "coordinator",
+    "method": "GET",
+    "path": "/api/v1/coordinator/domains/<int:domain_id>/assessments",
+    "func": "list_assessments",
+    "args": "domain_id"
+  },
+  {
+    "module": "coordinator",
+    "method": "POST",
+    "path": "/api/v1/coordinator/assessments",
+    "func": "create_assessment",
+    "args": ""
+  },
+  {
+    "module": "coordinator",
+    "method": "GET",
+    "path": "/api/v1/coordinator/assessments/<int:assessment_id>",
+    "func": "get_assessment",
+    "args": "assessment_id"
+  },
+  {
+    "module": "coordinator",
+    "method": "PATCH",
+    "path": "/api/v1/coordinator/assessments/<int:assessment_id>",
+    "func": "update_assessment",
+    "args": "assessment_id"
+  },
+  {
+    "module": "coordinator",
+    "method": "POST",
+    "path": "/api/v1/coordinator/assessments/<int:assessment_id>/publish",
+    "func": "publish_assessment",
+    "args": "assessment_id"
+  },
+  {
+    "module": "coordinator",
+    "method": "POST",
+    "path": "/api/v1/coordinator/assessments/<int:assessment_id>/close",
+    "func": "close_assessment",
+    "args": "assessment_id"
+  },
+  {
+    "module": "coordinator",
+    "method": "GET",
+    "path": "/api/v1/coordinator/submissions",
+    "func": "submissions",
+    "args": ""
+  },
+  {
+    "module": "coordinator",
+    "method": "GET",
+    "path": "/api/v1/coordinator/submissions/<int:attempt_id>",
+    "func": "submission_detail",
+    "args": "attempt_id"
+  },
+  {
+    "module": "coordinator",
+    "method": "POST",
+    "path": "/api/v1/coordinator/submissions/<int:attempt_id>/grade",
+    "func": "grade_submission",
+    "args": "attempt_id"
+  },
+  {
+    "module": "coordinator",
+    "method": "POST",
+    "path": "/api/v1/coordinator/submissions/<int:attempt_id>/attendance",
+    "func": "set_attendance",
+    "args": "attempt_id"
+  },
+  {
+    "module": "coordinator",
+    "method": "POST",
+    "path": "/api/v1/coordinator/submissions/<int:attempt_id>/request-changes",
+    "func": "request_changes",
+    "args": "attempt_id"
+  },
+  {
+    "module": "coordinator",
+    "method": "GET",
+    "path": "/api/v1/coordinator/students",
+    "func": "students",
+    "args": ""
+  },
+  {
+    "module": "coordinator",
+    "method": "GET",
+    "path": "/api/v1/coordinator/students/<int:student_id>",
+    "func": "student_detail",
+    "args": "student_id"
+  },
+  {
+    "module": "coordinator",
+    "method": "GET",
+    "path": "/api/v1/coordinator/analytics",
+    "func": "analytics",
+    "args": ""
+  },
+  {
+    "module": "coordinator",
+    "method": "GET",
+    "path": "/api/v1/coordinator/students/progress",
+    "func": "student_progress",
+    "args": ""
+  },
+  {
+    "module": "coordinator",
+    "method": "GET",
+    "path": "/api/v1/coordinator/exports/students.csv",
+    "func": "export_students",
+    "args": ""
+  },
+  {
+    "module": "coordinator",
+    "method": "GET",
+    "path": "/api/v1/coordinator/exports/submissions.csv",
+    "func": "export_submissions",
+    "args": ""
+  },
+  {
+    "module": "faculty",
+    "method": "GET",
+    "path": "/api/v1/faculty/dashboard",
+    "func": "dashboard",
+    "args": ""
+  },
+  {
+    "module": "faculty",
+    "method": "GET",
+    "path": "/api/v1/faculty/domains",
+    "func": "my_domains",
+    "args": ""
+  },
+  {
+    "module": "faculty",
+    "method": "GET",
+    "path": "/api/v1/faculty/task-evidence",
+    "func": "task_evidence",
+    "args": ""
+  },
+  {
+    "module": "faculty",
+    "method": "POST",
+    "path": "/api/v1/faculty/task-evidence/<int:evidence_id>/review",
+    "func": "review_evidence",
+    "args": "evidence_id"
+  },
+  {
+    "module": "faculty",
+    "method": "GET",
+    "path": "/api/v1/faculty/appeals",
+    "func": "appeals",
+    "args": ""
+  },
+  {
+    "module": "faculty",
+    "method": "POST",
+    "path": "/api/v1/faculty/appeals/<int:appeal_id>/assign",
+    "func": "assign_appeal",
+    "args": "appeal_id"
+  },
+  {
+    "module": "faculty",
+    "method": "POST",
+    "path": "/api/v1/faculty/appeals/<int:appeal_id>/decision",
+    "func": "decide_appeal",
+    "args": "appeal_id"
+  },
+  {
+    "module": "faculty",
+    "method": "GET",
+    "path": "/api/v1/faculty/point-adjustments",
+    "func": "point_adjustments",
+    "args": ""
+  },
+  {
+    "module": "faculty",
+    "method": "POST",
+    "path": "/api/v1/faculty/point-adjustments",
+    "func": "create_adjustment",
+    "args": ""
+  },
+  {
+    "module": "faculty",
+    "method": "POST",
+    "path": "/api/v1/faculty/point-adjustments/<int:adjustment_id>/review",
+    "func": "review_adjustment",
+    "args": "adjustment_id"
+  },
+  {
+    "module": "faculty",
+    "method": "GET",
+    "path": "/api/v1/faculty/requests",
+    "func": "request_inbox",
+    "args": ""
+  },
+  {
+    "module": "faculty",
+    "method": "GET",
+    "path": "/api/v1/faculty/analytics",
+    "func": "analytics",
+    "args": ""
+  },
+  {
+    "module": "faculty",
+    "method": "GET",
+    "path": "/api/v1/faculty/assessments",
+    "func": "list_faculty_assessments",
+    "args": ""
+  },
+  {
+    "module": "faculty",
+    "method": "GET",
+    "path": "/api/v1/faculty/authorizations",
+    "func": "list_authorizations",
+    "args": ""
+  },
+  {
+    "module": "faculty",
+    "method": "POST",
+    "path": "/api/v1/faculty/assessments/<int:assessment_id>/authorize-student",
+    "func": "authorize_student",
+    "args": "assessment_id"
+  },
+  {
+    "module": "faculty",
+    "method": "POST",
+    "path": "/api/v1/faculty/assessments/<int:assessment_id>/open-proctor",
+    "func": "open_proctor",
+    "args": "assessment_id"
+  },
+  {
+    "module": "faculty",
+    "method": "DELETE",
+    "path": "/api/v1/faculty/authorizations/<int:auth_id>",
+    "func": "revoke_authorization",
+    "args": "auth_id"
+  },
+  {
+    "module": "admin",
+    "method": "GET",
+    "path": "/api/v1/admin/dashboard",
+    "func": "dashboard",
+    "args": ""
+  },
+  {
+    "module": "admin",
+    "method": "GET",
+    "path": "/api/v1/admin/users",
+    "func": "users",
+    "args": ""
+  },
+  {
+    "module": "admin",
+    "method": "POST",
+    "path": "/api/v1/admin/users",
+    "func": "create_user",
+    "args": ""
+  },
+  {
+    "module": "admin",
+    "method": "PATCH",
+    "path": "/api/v1/admin/users/<int:user_id>",
+    "func": "update_user",
+    "args": "user_id"
+  },
+  {
+    "module": "admin",
+    "method": "POST",
+    "path": "/api/v1/admin/users/<int:user_id>/toggle-active",
+    "func": "toggle_active",
+    "args": "user_id"
+  },
+  {
+    "module": "admin",
+    "method": "POST",
+    "path": "/api/v1/admin/users/<int:user_id>/approve",
+    "func": "approve_user",
+    "args": "user_id"
+  },
+  {
+    "module": "admin",
+    "method": "POST",
+    "path": "/api/v1/admin/users/<int:user_id>/reset-password",
+    "func": "reset_user_password",
+    "args": "user_id"
+  },
+  {
+    "module": "admin",
+    "method": "GET",
+    "path": "/api/v1/admin/domains",
+    "func": "domains",
+    "args": ""
+  },
+  {
+    "module": "admin",
+    "method": "POST",
+    "path": "/api/v1/admin/domains",
+    "func": "create_domain",
+    "args": ""
+  },
+  {
+    "module": "admin",
+    "method": "PATCH",
+    "path": "/api/v1/admin/domains/<int:domain_id>",
+    "func": "update_domain",
+    "args": "domain_id"
+  },
+  {
+    "module": "admin",
+    "method": "POST",
+    "path": "/api/v1/admin/domains/<int:domain_id>/toggle-active",
+    "func": "toggle_domain",
+    "args": "domain_id"
+  },
+  {
+    "module": "admin",
+    "method": "GET",
+    "path": "/api/v1/admin/content",
+    "func": "content_registry",
+    "args": ""
+  },
+  {
+    "module": "admin",
+    "method": "GET",
+    "path": "/api/v1/admin/assessments",
+    "func": "assessment_registry",
+    "args": ""
+  },
+  {
+    "module": "admin",
+    "method": "POST",
+    "path": "/api/v1/admin/assessments/<int:assessment_id>/reopen",
+    "func": "reopen_assessment",
+    "args": "assessment_id"
+  },
+  {
+    "module": "admin",
+    "method": "POST",
+    "path": "/api/v1/admin/assessments/<int:assessment_id>/auto-release",
+    "func": "auto_release_assessment",
+    "args": "assessment_id"
+  },
+  {
+    "module": "admin",
+    "method": "GET",
+    "path": "/api/v1/admin/tasks",
+    "func": "tasks",
+    "args": ""
+  },
+  {
+    "module": "admin",
+    "method": "POST",
+    "path": "/api/v1/admin/tasks",
+    "func": "create_task",
+    "args": ""
+  },
+  {
+    "module": "admin",
+    "method": "PATCH",
+    "path": "/api/v1/admin/tasks/<int:task_id>",
+    "func": "update_task",
+    "args": "task_id"
+  },
+  {
+    "module": "admin",
+    "method": "GET",
+    "path": "/api/v1/admin/announcements",
+    "func": "announcements",
+    "args": ""
+  },
+  {
+    "module": "admin",
+    "method": "POST",
+    "path": "/api/v1/admin/announcements",
+    "func": "create_announcement",
+    "args": ""
+  },
+  {
+    "module": "admin",
+    "method": "PATCH",
+    "path": "/api/v1/admin/announcements/<int:announcement_id>",
+    "func": "update_announcement",
+    "args": "announcement_id"
+  },
+  {
+    "module": "admin",
+    "method": "GET",
+    "path": "/api/v1/admin/settings",
+    "func": "get_settings",
+    "args": ""
+  },
+  {
+    "module": "admin",
+    "method": "PUT",
+    "path": "/api/v1/admin/settings",
+    "func": "update_settings",
+    "args": ""
+  },
+  {
+    "module": "admin",
+    "method": "GET",
+    "path": "/api/v1/admin/audit-logs",
+    "func": "audit_logs",
+    "args": ""
+  }
+]

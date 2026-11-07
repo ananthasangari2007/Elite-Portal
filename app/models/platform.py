@@ -72,9 +72,9 @@ class TaskEvidence(db.Model):
     point_ledger_entry = db.relationship("PointLedger", foreign_keys=[point_ledger_id])
 
     __table_args__ = (
-        db.UniqueConstraint("student_id", "submission_date",
-                            name="uq_daily_task_evidence"),
-        # One submission per student per business day
+        db.UniqueConstraint("student_id", "task_id", "submission_date",
+                            name="uq_daily_task_evidence_per_task"),
+        # One submission per student per task per business day
     )
 
 

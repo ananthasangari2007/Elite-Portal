@@ -39,6 +39,17 @@ class Config:
         SQLALCHEMY_DATABASE_URI = f"sqlite:///{BASE_DIR / 'instance' / 'elite_portal.sqlite3'}"
 
     SQLALCHEMY_TRACK_MODIFICATIONS = False
+    SQLALCHEMY_ENGINE_OPTIONS = (
+        {}
+        if "sqlite" in SQLALCHEMY_DATABASE_URI
+        else {
+            "pool_size": 10,
+            "max_overflow": 20,
+            "pool_recycle": 300,
+            "pool_pre_ping": True,
+            "pool_timeout": 30,
+        }
+    )
 
     MAX_CONTENT_LENGTH = 50 * 1024 * 1024  # 50MB
     SESSION_COOKIE_HTTPONLY = True
@@ -46,9 +57,8 @@ class Config:
     SESSION_COOKIE_SECURE = is_production
     REMEMBER_COOKIE_HTTPONLY = True
     REMEMBER_COOKIE_SECURE = is_production
-    PERMANENT_SESSION_LIFETIME = timedelta(
-        seconds=int(os.getenv("SESSION_LIFETIME_SECONDS", str(60 * 60 * 8)))
-    )
+    SESSION_LIFETIME_SECONDS = int(os.getenv("SESSION_LIFETIME_SECONDS", str(60 * 60 * 8)))
+    PERMANENT_SESSION_LIFETIME = timedelta(seconds=SESSION_LIFETIME_SECONDS)
 
     # REST API / SPA
     API_PREFIX = "/api/v1"

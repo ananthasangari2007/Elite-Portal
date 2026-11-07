@@ -1,13 +1,11 @@
 import secrets
 from datetime import datetime, timedelta
 
-from flask_login import UserMixin
-from werkzeug.security import check_password_hash, generate_password_hash
-
-from app import db, login_manager
+from app.database import db
+from app.security import check_password_hash, generate_password_hash
 
 
-class User(UserMixin, db.Model):
+class User(db.Model):
     __tablename__ = "user"
 
     id = db.Column(db.Integer, primary_key=True)
@@ -21,6 +19,7 @@ class User(UserMixin, db.Model):
     has_active_sprint_penalty = db.Column(db.Boolean, default=False, nullable=False, index=True)
     profile_completed = db.Column(db.Boolean, default=False, nullable=False)
     register_number = db.Column(db.String(80), index=True)
+    phone_number = db.Column(db.String(30))
     department = db.Column(db.String(120), index=True)
     year = db.Column(db.Integer)
     section = db.Column(db.String(10))
@@ -80,7 +79,7 @@ class User(UserMixin, db.Model):
 
     def total_points(self):
         from sqlalchemy import func
-        from app import db
+        from app.models.platform import PointLedger
         result = db.session.query(func.coalesce(func.sum(PointLedger.points), 0)).filter(
             PointLedger.student_id == self.id
         ).scalar()
@@ -88,11 +87,6 @@ class User(UserMixin, db.Model):
 
     def __repr__(self):
         return f"<User {self.email} [{self.role}]>"
-
-
-@login_manager.user_loader
-def load_user(user_id):
-    return db.session.get(User, int(user_id))
 
 
 class PasswordResetToken(db.Model):
